@@ -21,6 +21,7 @@
 #include <string>
 
 #include "frontend/server/environment.h"
+#include "frontend/server/persistence_manager.h"
 #include "grpcpp/impl/service_type.h"
 #include "grpcpp/server.h"
 #include "grpcpp/support/status.h"
@@ -54,6 +55,7 @@ class Server {
  public:
   struct Options {
     std::string server_address;
+    std::string data_dir;  // Empty = no persistence
   };
 
   // Returns an initialized Server, or nullptr if the initialization failed.
@@ -87,6 +89,9 @@ class Server {
   std::unique_ptr<grpc::Service> instance_admin_service_;
   std::unique_ptr<grpc::Service> operations_service_;
   std::unique_ptr<grpc::Service> spanner_service_;
+
+  // Persistence manager (nullptr if persistence is disabled).
+  std::unique_ptr<PersistenceManager> persistence_manager_;
 
   // Underlying gRPC server.
   std::unique_ptr<grpc::Server> grpc_server_;

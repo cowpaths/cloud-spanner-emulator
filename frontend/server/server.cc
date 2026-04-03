@@ -317,6 +317,20 @@ std::unique_ptr<Server> Server::Create(const Server::Options& options) {
       .RegisterService(server->instance_admin_service_.get())
       .RegisterService(server->operations_service_.get());
 
+  // Initialize persistence if configured.
+  server->persistence_manager_ =
+      PersistenceManager::Create(options.data_dir);
+  if (server->persistence_manager_) {
+    auto status =
+        server->persistence_manager_->RestoreState(server->env());
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to restore persistent state: " << status;
+      return nullptr;
+    }
+    ABSL_LOG(INFO) << "Restored persistent state from: "
+                   << options.data_dir;
+  }
+
   // Actually start the server.
   server->grpc_server_ = builder.BuildAndStart();
   if (server->port_ < 0) {
@@ -329,7 +343,18 @@ std::unique_ptr<Server> Server::Create(const Server::Options& options) {
 
 void Server::WaitForShutdown() { grpc_server_->Wait(); }
 
-void Server::Shutdown() { grpc_server_->Shutdown(); }
+void Server::Shutdown() {
+  if (persistence_manager_) {
+    auto status = persistence_manager_->SaveState(env_.get());
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to save persistent state: " << status;
+    } else {
+      ABSL_LOG(INFO) << "Saved persistent state to: "
+                     << persistence_manager_->data_dir();
+    }
+  }
+  grpc_server_->Shutdown();
+}
 
 }  // namespace frontend
 }  // namespace emulator

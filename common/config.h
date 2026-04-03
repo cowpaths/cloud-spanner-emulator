@@ -54,6 +54,10 @@ int abort_current_transaction_probability();
 
 void set_abort_current_transaction_probability(int probability);
 
+// Returns the directory for persisting emulator state.
+// Empty string means persistence is disabled (pure in-memory mode).
+std::string data_dir();
+
 }  // namespace config
 }  // namespace emulator
 }  // namespace spanner

@@ -84,6 +84,23 @@ cc_test(
 )
 
 cc_library(
+    name = "persistence_manager",
+    srcs = ["persistence_manager.cc"],
+    hdrs = ["persistence_manager.h"],
+    deps = [
+        ":environment",
+        "//backend/storage:snapshot_loader",
+        "//backend/storage:snapshot_writer",
+        "//backend/storage:wal_writer",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_zetasql//zetasql/base",
+    ],
+)
+
+cc_library(
     name = "server",
     srcs = [
         "server.cc",
@@ -94,6 +111,7 @@ cc_library(
     deps = [
         ":environment",
         ":handler",
+        ":persistence_manager",
         ":request_context",
         "//common:constants",
         "//common:errors",

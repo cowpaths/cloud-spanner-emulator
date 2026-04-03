@@ -30,6 +30,7 @@ int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
   Server::Options options;
   options.server_address = google::spanner::emulator::config::grpc_host_port();
+  options.data_dir = google::spanner::emulator::config::data_dir();
   std::unique_ptr<Server> server = Server::Create(options);
   if (!server) {
     ABSL_LOG(ERROR) << "Failed to start gRPC server.";
