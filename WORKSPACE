@@ -18,6 +18,12 @@ workspace(name = "com_google_cloud_spanner_emulator")
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
+# Fix Bazel 6.x wrapped_clang missing LC_UUID on macOS 15+.
+# This is a no-op on Linux and when LC_UUID is already present.
+load("//build/bazel:macos_cc_fix.bzl", "fix_macos_cc_toolchain")
+
+fix_macos_cc_toolchain(name = "macos_cc_fix")
+
 http_archive(
     name = "google_bazel_common",
     sha256 = "82a49fb27c01ad184db948747733159022f9464fc2e62da996fa700594d9ea42",
@@ -266,6 +272,10 @@ http_archive(
 
 http_archive(
     name = "com_googlesource_code_riegeli",
+    patch_cmds = [
+        # macOS: cfile_internal.cc uses close() but doesn't include <unistd.h>
+        "sed -i.bak '/#include <stdio.h>/a\\\n#include <unistd.h>' riegeli/bytes/cfile_internal.cc && rm riegeli/bytes/cfile_internal.cc.bak",
+    ],
     sha256 = "603c4d35224cf00f1d4a68c45cc4c5ca598613886886f93e1cffbe49a18aa6ea",
     strip_prefix = "riegeli-3966874f4ce0b05bb32ae184f1fb44411992e12d",
     url = "https://github.com/google/riegeli/archive/3966874f4ce0b05bb32ae184f1fb44411992e12d.tar.gz",
@@ -487,6 +497,11 @@ http_archive(
 http_archive(
     name = "zlib",
     build_file = "//build/bazel:zlib.BUILD",
+    patch_cmds = [
+        # macOS: zutil.h incorrectly treats TARGET_OS_MAC (modern macOS) as
+        # classic Mac OS, defining fdopen as NULL which conflicts with the SDK.
+        "sed -i.bak 's/#if defined(MACOS) || defined(TARGET_OS_MAC)/#if defined(MACOS) \\&\\& !defined(__APPLE__)/' zutil.h && rm zutil.h.bak",
+    ],
     sha256 = "c3e5e9fdd5004dcb542feda5ee4f0ff0744628baf8ed2dd5d66f8ca1197cb1a1",
     strip_prefix = "zlib-1.3.1",
     urls = ["http://zlib.net/fossils/zlib-1.3.1.tar.gz"],
