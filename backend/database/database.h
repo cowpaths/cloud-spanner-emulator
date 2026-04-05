@@ -122,6 +122,21 @@ class Database {
 
   PgOidAssigner* get_pg_oid_assigner() { return pg_oid_assigner_.get(); }
 
+  // Accessors for persistence support.
+  Storage* storage() { return storage_.get(); }
+  const std::string& database_id() const { return database_id_; }
+  zetasql::TypeFactory* type_factory() { return type_factory_.get(); }
+
+  // ID generator accessors for persistence save/restore.
+  TransactionIDGenerator& transaction_id_generator() {
+    return transaction_id_generator_;
+  }
+  TableIDGenerator& table_id_generator() { return table_id_generator_; }
+  ColumnIDGenerator& column_id_generator() { return column_id_generator_; }
+  ChangeStreamIDGenerator& change_stream_id_generator() {
+    return change_stream_id_generator_;
+  }
+
  private:
   Database();
   // Delete copy and assignment operators since database shouldn't be copyable.

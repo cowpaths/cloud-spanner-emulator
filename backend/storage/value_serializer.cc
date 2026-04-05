@@ -93,7 +93,7 @@ PersistedKey SerializeKey(const Key& key) {
   PersistedKey result;
 
   // Check for special key values.
-  if (key == Key::Infinity()) {
+  if (key.IsInfinity()) {
     result.set_is_infinity(true);
     return result;
   }
@@ -112,12 +112,7 @@ PersistedKey SerializeKey(const Key& key) {
     col->set_is_nulls_last(key.IsColumnNullsLast(i));
   }
 
-  // Note: is_prefix_limit is a private member of Key. We detect it by
-  // comparing with the prefix limit of a key constructed from the same
-  // columns. Since Key::ToPrefixLimit() returns a new key with
-  // is_prefix_limit_ = true, we cannot directly detect this property
-  // without accessor methods. For now, we leave is_prefix_limit as false.
-  // TODO: Add an IsPrefixLimit() accessor to Key to support this.
+  result.set_is_prefix_limit(key.IsPrefixLimit());
 
   return result;
 }

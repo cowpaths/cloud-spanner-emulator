@@ -170,18 +170,8 @@ absl::Status SnapshotWriter::WriteSnapshot(
   absl::Time now = absl::Now();
   snapshot.set_snapshot_timestamp_micros(absl::ToUnixMicros(now));
 
-  // We need to iterate all instances. Since ListInstances requires a project
-  // URI and we don't know all projects, we use a broad prefix. The emulator
-  // typically uses "projects/test-project" or similar. We iterate all instances
-  // by listing with the common prefix "projects/".
-  //
-  // TODO: The InstanceManager should provide a ListAllInstances() method
-  // for persistence. For now, we use the existing ListInstances with a
-  // prefix that covers all projects. Unfortunately, ListInstances does a
-  // prefix match on the project URI, so we try with "projects/" which
-  // should cover all instances in the emulator.
-  ZETASQL_ASSIGN_OR_RETURN(auto instances,
-                   instance_manager->ListInstances("projects/"));
+  // Iterate all instances across all projects.
+  auto instances = instance_manager->ListAllInstances();
 
   // Collect all unique project URIs from instance URIs for later use.
   std::set<std::string> instance_uris;
@@ -235,14 +225,11 @@ absl::Status SnapshotWriter::WriteSnapshot(
                      << db->database_uri() << ": " << storage_result.status();
       }
 
-      // TODO: Persist ID generator sequence numbers (next_table_seq,
-      // next_column_seq, next_change_stream_seq, next_transaction_seq).
-      // The backend::Database does not currently expose these values.
-      // When accessors are added, set them here:
-      //   pd->set_next_table_id_seq(...);
-      //   pd->set_next_column_id_seq(...);
-      //   pd->set_next_change_stream_id_seq(...);
-      //   pd->set_next_transaction_id_seq(...);
+      // Persist ID generator sequence numbers so they can be restored.
+      pd->set_next_table_id_seq(backend->table_id_generator().GetCurrentValue());
+      pd->set_next_column_id_seq(backend->column_id_generator().GetCurrentValue());
+      pd->set_next_change_stream_id_seq(backend->change_stream_id_generator().GetCurrentValue());
+      pd->set_next_transaction_id_seq(backend->transaction_id_generator().GetCurrentValue());
     }
   }
 

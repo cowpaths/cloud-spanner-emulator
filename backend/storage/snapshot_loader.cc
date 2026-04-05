@@ -59,12 +59,8 @@ namespace instance_api = ::google::spanner::admin::instance::v1;
 
 // Populate the storage of a database from persisted data.
 //
-// Since the backend::Database does not expose its Storage* publicly, we
-// use a ReadWriteTransaction to write the data via Mutations. This is
-// functionally correct but somewhat inefficient for bulk restore.
-//
-// TODO: Once backend::Database exposes storage() or provides a bulk-load
-// API, use that instead for better performance.
+// We use a ReadWriteTransaction to write the data via Mutations, which
+// handles constraint checks and index maintenance correctly.
 absl::Status PopulateStorage(
     backend::Database* database,
     const PersistedStorage& storage_proto,
@@ -74,10 +70,8 @@ absl::Status PopulateStorage(
     return absl::InternalError("Database has no schema after creation");
   }
 
-  // We need a TypeFactory for value deserialization. Since the database's
-  // type factory is not publicly accessible, we create a local one.
-  // TODO: Use the database's TypeFactory when it becomes accessible.
-  zetasql::TypeFactory type_factory;
+  // Use the database's TypeFactory for value deserialization.
+  zetasql::TypeFactory* type_factory = database->type_factory();
 
   // Create a read-write transaction to write data.
   ReadWriteOptions rw_options;
@@ -134,7 +128,7 @@ absl::Status PopulateStorage(
 
         ZETASQL_ASSIGN_OR_RETURN(
             auto value,
-            DeserializeValue(latest_version.value(), &type_factory));
+            DeserializeValue(latest_version.value(), type_factory));
 
         col_names.push_back(col->Name());
         col_values.push_back(std::move(value));
@@ -230,6 +224,20 @@ absl::StatusOr<absl::Time> SnapshotLoader::LoadSnapshot(
 
       ZETASQL_RETURN_IF_ERROR(
           PopulateStorage(database->backend(), pd.storage(), data_timestamp));
+    }
+
+    // Restore ID generator sequence numbers if present.
+    if (pd.next_table_id_seq() > 0) {
+      database->backend()->table_id_generator().SetCurrentValue(pd.next_table_id_seq());
+    }
+    if (pd.next_column_id_seq() > 0) {
+      database->backend()->column_id_generator().SetCurrentValue(pd.next_column_id_seq());
+    }
+    if (pd.next_change_stream_id_seq() > 0) {
+      database->backend()->change_stream_id_generator().SetCurrentValue(pd.next_change_stream_id_seq());
+    }
+    if (pd.next_transaction_id_seq() > 0) {
+      database->backend()->transaction_id_generator().SetCurrentValue(pd.next_transaction_id_seq());
     }
 
     LOG(INFO) << "Restored database " << pd.database_uri() << " with "

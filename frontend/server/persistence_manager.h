@@ -22,6 +22,7 @@
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "backend/storage/persistence.pb.h"
 #include "backend/storage/wal_writer.h"
 #include "frontend/server/environment.h"
 
@@ -58,6 +59,14 @@ class PersistenceManager {
 
  private:
   explicit PersistenceManager(const std::string& data_dir);
+
+  // WAL replay helpers for each record type.
+  absl::Status ReplayMetadataChange(
+      const backend::WalMetadataChange& change, ServerEnv* env);
+  absl::Status ReplaySchemaChange(
+      const backend::WalSchemaChange& change, ServerEnv* env);
+  absl::Status ReplayEntry(
+      const backend::WalEntry& entry, ServerEnv* env);
 
   std::string data_dir_;
   std::shared_ptr<backend::WalWriter> wal_writer_;

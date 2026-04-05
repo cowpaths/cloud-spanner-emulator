@@ -50,6 +50,18 @@ class UniqueIdGenerator {
     return IdType{next_seq_++};
   }
 
+  // Returns the current sequence value (the next value that would be assigned).
+  int64_t GetCurrentValue() const ABSL_LOCKS_EXCLUDED(mu_) {
+    absl::MutexLock lock(&mu_);
+    return next_seq_;
+  }
+
+  // Sets the current sequence value. Used during persistence restore.
+  void SetCurrentValue(int64_t value) ABSL_LOCKS_EXCLUDED(mu_) {
+    absl::MutexLock lock(&mu_);
+    next_seq_ = value;
+  }
+
  private:
   absl::Mutex mu_;
   int64_t next_seq_ ABSL_GUARDED_BY(mu_);
