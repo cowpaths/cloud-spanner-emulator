@@ -75,7 +75,8 @@ absl::StatusOr<zetasql::Value> DeserializeValue(
 
   const zetasql::Type* type = nullptr;
   absl::Status type_status =
-      type_factory->DeserializeFromSelfContainedProto(type_proto, &type);
+      type_factory->DeserializeFromSelfContainedProto(
+          type_proto, /*pool=*/nullptr, &type);
   if (!type_status.ok()) {
     return type_status;
   }

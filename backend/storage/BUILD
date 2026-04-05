@@ -15,9 +15,7 @@
 #
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("@rules_cc//cc:cc_proto_library.bzl", "cc_proto_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
-load("@rules_proto//proto:proto_library.bzl", "proto_library")
 
 package(
     default_visibility = ["//:__subpackages__"],
@@ -200,7 +198,6 @@ cc_library(
         "//backend/datamodel:key_set",
         "//backend/schema/catalog:schema",
         "//backend/schema/printer:print_ddl",
-        "//backend/transaction:options",
         "//backend/transaction:read_only_transaction",
         "//frontend/collections:database_manager",
         "//frontend/collections:instance_manager",
@@ -229,7 +226,6 @@ cc_library(
         "//backend/database:database",
         "//backend/schema/catalog:schema",
         "//backend/schema/updater:schema_updater",
-        "//backend/transaction:options",
         "//backend/transaction:read_write_transaction",
         "//frontend/collections:database_manager",
         "//frontend/collections:instance_manager",
@@ -245,6 +241,59 @@ cc_library(
         "@com_google_googleapis//google/spanner/admin/instance/v1:instance_cc_proto",
         "@com_google_zetasql//zetasql/base:status",
         "@com_google_zetasql//zetasql/public:type",
+        "@com_google_zetasql//zetasql/public:value",
+    ],
+)
+
+cc_test(
+    name = "value_serializer_test",
+    srcs = ["value_serializer_test.cc"],
+    deps = [
+        ":value_serializer",
+        "//backend/datamodel:key",
+        "//tests/common:proto_matchers",
+        "@com_github_google_benchmark//:benchmark",
+        "@com_github_grpc_grpc//:grpc++",
+        "@com_google_absl//absl/status",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_zetasql//zetasql/base/testing:status_matchers",
+        "@com_google_zetasql//zetasql/public:type",
+        "@com_google_zetasql//zetasql/public:value",
+    ],
+)
+
+cc_test(
+    name = "wal_writer_test",
+    srcs = ["wal_writer_test.cc"],
+    deps = [
+        ":persistence_cc_proto",
+        ":wal_writer",
+        "//tests/common:proto_matchers",
+        "@com_github_google_benchmark//:benchmark",
+        "@com_github_grpc_grpc//:grpc++",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_zetasql//zetasql/base/testing:status_matchers",
+    ],
+)
+
+cc_test(
+    name = "persistent_storage_test",
+    srcs = ["persistent_storage_test.cc"],
+    deps = [
+        ":persistent_storage",
+        ":persistence_cc_proto",
+        ":wal_writer",
+        "//backend/datamodel:key",
+        "//backend/datamodel:key_range",
+        "//tests/common:proto_matchers",
+        "@com_github_google_benchmark//:benchmark",
+        "@com_github_grpc_grpc//:grpc++",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/time",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_zetasql//zetasql/base/testing:status_matchers",
         "@com_google_zetasql//zetasql/public:value",
     ],
 )

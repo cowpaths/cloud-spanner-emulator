@@ -15,6 +15,7 @@
 //
 
 #include <algorithm>
+#include <csignal>
 #include <memory>
 
 #include "absl/flags/parse.h"
@@ -24,6 +25,17 @@
 #include "frontend/server/server.h"
 
 using Server = ::google::spanner::emulator::frontend::Server;
+
+namespace {
+Server* g_server = nullptr;
+
+void SignalHandler(int signal) {
+  ABSL_LOG(INFO) << "Received signal " << signal << ", shutting down.";
+  if (g_server) {
+    g_server->Shutdown();
+  }
+}
+}  // namespace
 
 int main(int argc, char** argv) {
   // Start the emulator gRPC server.
@@ -36,6 +48,11 @@ int main(int argc, char** argv) {
     ABSL_LOG(ERROR) << "Failed to start gRPC server.";
     return EXIT_FAILURE;
   }
+
+  // Install signal handlers for graceful shutdown (saves persistent state).
+  g_server = server.get();
+  std::signal(SIGINT, SignalHandler);
+  std::signal(SIGTERM, SignalHandler);
 
   ABSL_LOG(INFO) << "Cloud Spanner Emulator running.";
   ABSL_LOG(INFO) << "Server address: "
