@@ -54,9 +54,14 @@ cc_binary(
         "-D_GNU_SOURCE",
         "-fexceptions",
     ],
-    linkopts = [
-        "-Wl,-E",
-    ],
+    linkopts = select({
+        "@bazel_tools//src/conditions:darwin": [
+            "-Wl,-export_dynamic",
+        ],
+        "//conditions:default": [
+            "-Wl,-E",
+        ],
+    }),
     deps = [
         "//third_party/spanner_pg/src/backend:backend_with_stub_shims",
         "//third_party/spanner_pg/src/spangres:memory",

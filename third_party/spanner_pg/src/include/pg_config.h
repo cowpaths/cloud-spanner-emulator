@@ -103,7 +103,9 @@ extern "C++" {
 #endif
 
 /* Define to 1 if you have the `append_history' function. */
+#ifndef __APPLE__
 #define HAVE_APPEND_HISTORY 1
+#endif
 
 /* Define to 1 if you have the `ASN1_STRING_get0_data' function. */
 /* #undef HAVE_ASN1_STRING_GET0_DATA */
@@ -510,7 +512,9 @@ extern "C++" {
 #define HAVE_RL_FILENAME_COMPLETION_FUNCTION 1
 
 /* Define to 1 if you have the `rl_reset_screen_size' function. */
+#ifndef __APPLE__
 #define HAVE_RL_RESET_SCREEN_SIZE 1
+#endif
 
 /* Define to 1 if you have the <security/pam_appl.h> header file. */
 /* #undef HAVE_SECURITY_PAM_APPL_H */

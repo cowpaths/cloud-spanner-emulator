@@ -1,0 +1,65 @@
+#!/bin/bash
+# Bazel wrapper script (tools/bazel).
+# Bazel automatically uses this instead of the real binary when present.
+# The real bazel path is provided in the BAZEL_REAL environment variable.
+#
+# On macOS 15+, Bazel 6.x's wrapped_clang is missing LC_UUID which causes
+# dyld to reject it. This wrapper fixes that before delegating to real bazel.
+
+set -euo pipefail
+
+fix_cc_binaries() {
+  local output_base="$1"
+  local cc_dir="${output_base}/external/local_config_cc"
+  local install_dir="$(dirname "${output_base}")/install"
+  local needs_fix=false
+
+  # Check all three binaries for missing LC_UUID.
+  for bin in wrapped_clang wrapped_clang_pp libtool_check_unique; do
+    if [[ -f "${cc_dir}/${bin}" ]] && ! otool -l "${cc_dir}/${bin}" 2>/dev/null | grep -q LC_UUID; then
+      needs_fix=true
+      break
+    fi
+  done
+
+  if ! "${needs_fix}"; then
+    return
+  fi
+
+  local src="$(find "${install_dir}" -path "*/tools/osx/crosstool/wrapped_clang.cc" -maxdepth 8 2>/dev/null | head -1)"
+  if [[ -z "${src}" ]]; then
+    return
+  fi
+
+  local libtool_src="$(echo "${src}" | sed 's|osx/crosstool/wrapped_clang.cc|objc/libtool_check_unique.cc|')"
+
+  for name in wrapped_clang wrapped_clang_pp; do
+    if [[ -f "${cc_dir}/${name}" ]] && ! otool -l "${cc_dir}/${name}" 2>/dev/null | grep -q LC_UUID; then
+      clang++ -std=c++11 -O2 -Wl,-random_uuid -o "${cc_dir}/${name}" "${src}" 2>/dev/null
+    fi
+  done
+
+  if [[ -f "${cc_dir}/libtool_check_unique" && -f "${libtool_src}" ]] && \
+     ! otool -l "${cc_dir}/libtool_check_unique" 2>/dev/null | grep -q LC_UUID; then
+    clang++ -std=c++11 -O2 -Wl,-random_uuid -o "${cc_dir}/libtool_check_unique" "${libtool_src}" 2>/dev/null
+  fi
+
+  echo "INFO: Fixed Bazel CC toolchain LC_UUID for macOS 15+." >&2
+}
+
+# Fix wrapped_clang LC_UUID on macOS if needed.
+if [[ "$(uname)" == "Darwin" ]]; then
+  OUTPUT_BASE="$("${BAZEL_REAL}" info output_base 2>/dev/null || true)"
+
+  if [[ -n "${OUTPUT_BASE}" ]]; then
+    # If local_config_cc doesn't exist yet, trigger its creation with a
+    # no-build query so we can fix it before any real compilation happens.
+    if [[ ! -f "${OUTPUT_BASE}/external/local_config_cc/wrapped_clang" ]]; then
+      "${BAZEL_REAL}" build --nobuild @local_config_cc//:builtin_include_directory_paths 2>/dev/null || true
+    fi
+
+    fix_cc_binaries "${OUTPUT_BASE}"
+  fi
+fi
+
+exec "${BAZEL_REAL}" "$@"

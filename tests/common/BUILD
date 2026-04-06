@@ -247,6 +247,7 @@ cc_test(
     ],
     deps = [
         ":file_based_schema_reader",
+        ":file_based_test_runner",
         ":proto_matchers",
         "@com_github_google_benchmark//:benchmark",
         "@com_github_grpc_grpc//:grpc++",

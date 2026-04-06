@@ -133,14 +133,19 @@ cc_binary(
         "-D_GNU_SOURCE",
         "-fexceptions",
     ],
-    linkopts = [
-        "-Wl,--version-script",
-        "$(location :exports.ld)",
-    ],
+    linkopts = select({
+        "@bazel_tools//src/conditions:darwin": [],
+        "//conditions:default": [
+            "-Wl,--version-script",
+            "$(location :exports.ld)",
+        ],
+    }),
     linkshared = 1,
     linkstatic = 1,
-    deps = [
-        ":exports.ld",
+    deps = select({
+        "@bazel_tools//src/conditions:darwin": [],
+        "//conditions:default": [":exports.ld"],
+    }) + [
         ":libpq_static",
     ],
 )

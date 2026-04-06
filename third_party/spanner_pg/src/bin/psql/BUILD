@@ -90,10 +90,16 @@ cc_binary(
     includes = [
         ".",
     ],
-    linkopts = [
-        "-Wl,-rpath=\\$$ORIGIN/../lib",
-        "-Wl,-rpath=\\$$EXEC_ORIGIN/../lib",
-    ],
+    linkopts = select({
+        "@bazel_tools//src/conditions:darwin": [
+            "-Wl,-rpath,@loader_path/../lib",
+            "-lreadline",
+        ],
+        "//conditions:default": [
+            "-Wl,-rpath=\\$$ORIGIN/../lib",
+            "-Wl,-rpath=\\$$EXEC_ORIGIN/../lib",
+        ],
+    }),
     deps = [
         "//third_party/spanner_pg/src/fe_utils",
         "//third_party/spanner_pg/src/interfaces/libpq:libpq_static",

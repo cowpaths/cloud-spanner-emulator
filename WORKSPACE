@@ -18,12 +18,6 @@ workspace(name = "com_google_cloud_spanner_emulator")
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-# Fix Bazel 6.x wrapped_clang missing LC_UUID on macOS 15+.
-# This is a no-op on Linux and when LC_UUID is already present.
-load("//build/bazel:macos_cc_fix.bzl", "fix_macos_cc_toolchain")
-
-fix_macos_cc_toolchain(name = "macos_cc_fix")
-
 http_archive(
     name = "google_bazel_common",
     sha256 = "82a49fb27c01ad184db948747733159022f9464fc2e62da996fa700594d9ea42",
@@ -288,6 +282,24 @@ http_archive(
     urls = ["https://github.com/protocolbuffers/protobuf/releases/download/v27.5/protobuf-27.5.tar.gz"],
 )
 
+################################################################################
+# zlib - must be defined before protobuf_deps() which also defines @zlib,     #
+# so that our macOS-patched version takes precedence (first definition wins).  #
+################################################################################
+
+http_archive(
+    name = "zlib",
+    build_file = "//build/bazel:zlib.BUILD",
+    patch_cmds = [
+        # macOS: zutil.h incorrectly treats TARGET_OS_MAC (modern macOS) as
+        # classic Mac OS, defining fdopen as NULL which conflicts with the SDK.
+        "sed -i.bak 's/#if defined(MACOS) || defined(TARGET_OS_MAC)/#if defined(MACOS) \\&\\& !defined(__APPLE__)/' zutil.h && rm zutil.h.bak",
+    ],
+    sha256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+    strip_prefix = "zlib-1.3.1",
+    urls = ["http://zlib.net/fossils/zlib-1.3.1.tar.gz"],
+)
+
 load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
 
 protobuf_deps()
@@ -492,17 +504,4 @@ http_archive(
     sha256 = "3b1c3b46e416d36931efd34663122d7f51b550c87f74de2d38249516fe7d8be5",
     strip_prefix = "zstd-1.5.6/lib",
     urls = ["https://github.com/facebook/zstd/archive/v1.5.6.zip"],
-)
-
-http_archive(
-    name = "zlib",
-    build_file = "//build/bazel:zlib.BUILD",
-    patch_cmds = [
-        # macOS: zutil.h incorrectly treats TARGET_OS_MAC (modern macOS) as
-        # classic Mac OS, defining fdopen as NULL which conflicts with the SDK.
-        "sed -i.bak 's/#if defined(MACOS) || defined(TARGET_OS_MAC)/#if defined(MACOS) \\&\\& !defined(__APPLE__)/' zutil.h && rm zutil.h.bak",
-    ],
-    sha256 = "c3e5e9fdd5004dcb542feda5ee4f0ff0744628baf8ed2dd5d66f8ca1197cb1a1",
-    strip_prefix = "zlib-1.3.1",
-    urls = ["http://zlib.net/fossils/zlib-1.3.1.tar.gz"],
 )

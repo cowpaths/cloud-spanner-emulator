@@ -54,16 +54,23 @@ cc_binary(
         "-D_GNU_SOURCE",
         "-fexceptions",
     ],
-    linkopts = [
-        "-Wl,--version-script=$(location :exports.ld)",
-        "-Wl,--undefined-version",
-        "-Wl,-rpath=\\$$ORIGIN",
-        "-Wl,-rpath=\\$$EXEC_ORIGIN",
-    ],
+    linkopts = select({
+        "@bazel_tools//src/conditions:darwin": [
+            "-Wl,-rpath,@loader_path",
+        ],
+        "//conditions:default": [
+            "-Wl,--version-script=$(location :exports.ld)",
+            "-Wl,--undefined-version",
+            "-Wl,-rpath=\\$$ORIGIN",
+            "-Wl,-rpath=\\$$EXEC_ORIGIN",
+        ],
+    }),
     linkshared = 1,
     linkstatic = 1,
-    deps = [
-        ":exports.ld",
+    deps = select({
+        "@bazel_tools//src/conditions:darwin": [],
+        "//conditions:default": [":exports.ld"],
+    }) + [
         "//third_party/spanner_pg/src/include",
         "//third_party/spanner_pg/src/interfaces/libpq",
     ],

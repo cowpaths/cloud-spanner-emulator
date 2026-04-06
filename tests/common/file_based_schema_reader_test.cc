@@ -15,6 +15,7 @@
 //
 
 #include "tests/common/file_based_schema_reader.h"
+#include "tests/common/file_based_test_runner.h"
 
 #include <string>
 

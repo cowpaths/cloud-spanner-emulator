@@ -86,9 +86,6 @@ struct FileBasedSchemaSet {
 absl::StatusOr<FileBasedSchemaSet> ReadSchemaSetFromFile(
     const std::string& file, const FileBasedSchemaSetOptions& options);
 
-// Returns the runfiles directory for the given source-root relative directory.
-std::string GetRunfilesDir(const std::string& dir);
-
 }  // namespace test
 }  // namespace emulator
 }  // namespace spanner
