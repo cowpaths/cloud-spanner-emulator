@@ -19,6 +19,7 @@
 #include <memory>
 
 #include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
 #include "zetasql/base/logging.h"
 #include "absl/strings/str_cat.h"
 #include "common/config.h"
@@ -38,6 +39,29 @@ void SignalHandler(int signal) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  absl::SetProgramUsageMessage(
+      "Cloud Spanner Emulator\n"
+      "\n"
+      "A local emulator for Cloud Spanner that runs entirely on your machine.\n"
+      "\n"
+      "Usage:\n"
+      "  emulator_main [flags]\n"
+      "\n"
+      "Common flags:\n"
+      "  --host_port=HOST:PORT\n"
+      "      Address to serve gRPC requests on (default: localhost:10007).\n"
+      "\n"
+      "  --data_dir=PATH\n"
+      "      Directory for persisting emulator state across restarts.\n"
+      "      When empty (default), the emulator runs in pure in-memory\n"
+      "      mode and all data is lost on shutdown.\n"
+      "\n"
+      "  --enable_fault_injection\n"
+      "      Enable fault injection for testing application error handling.\n"
+      "\n"
+      "  --log_requests\n"
+      "      Stream gRPC request/response messages to the INFO log.\n");
+
   // Start the emulator gRPC server.
   absl::ParseCommandLine(argc, argv);
   Server::Options options;
