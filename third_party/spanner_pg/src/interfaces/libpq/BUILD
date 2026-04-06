@@ -142,10 +142,8 @@ cc_binary(
     }),
     linkshared = 1,
     linkstatic = 1,
-    deps = select({
-        "@bazel_tools//src/conditions:darwin": [],
-        "//conditions:default": [":exports.ld"],
-    }) + [
+    deps = [
+        ":exports.ld",
         ":libpq_static",
     ],
 )

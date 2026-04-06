@@ -1,0 +1,11 @@
+diff --git a/riegeli/bytes/cfile_internal.cc b/riegeli/bytes/cfile_internal.cc
+--- a/riegeli/bytes/cfile_internal.cc
++++ b/riegeli/bytes/cfile_internal.cc
+@@ -14,6 +14,7 @@
+
+ #include "riegeli/bytes/cfile_internal.h"
+
++#include <unistd.h>
+ #include <stdio.h>
+
+ #include "absl/base/optimization.h"

@@ -266,10 +266,7 @@ http_archive(
 
 http_archive(
     name = "com_googlesource_code_riegeli",
-    patch_cmds = [
-        # macOS: cfile_internal.cc uses close() but doesn't include <unistd.h>
-        "sed -i.bak '/#include <stdio.h>/a\\\n#include <unistd.h>' riegeli/bytes/cfile_internal.cc && rm riegeli/bytes/cfile_internal.cc.bak",
-    ],
+    patches = ["//build/bazel:riegeli.patch"],
     sha256 = "603c4d35224cf00f1d4a68c45cc4c5ca598613886886f93e1cffbe49a18aa6ea",
     strip_prefix = "riegeli-3966874f4ce0b05bb32ae184f1fb44411992e12d",
     url = "https://github.com/google/riegeli/archive/3966874f4ce0b05bb32ae184f1fb44411992e12d.tar.gz",
@@ -290,11 +287,7 @@ http_archive(
 http_archive(
     name = "zlib",
     build_file = "//build/bazel:zlib.BUILD",
-    patch_cmds = [
-        # macOS: zutil.h incorrectly treats TARGET_OS_MAC (modern macOS) as
-        # classic Mac OS, defining fdopen as NULL which conflicts with the SDK.
-        "sed -i.bak 's/#if defined(MACOS) || defined(TARGET_OS_MAC)/#if defined(MACOS) \\&\\& !defined(__APPLE__)/' zutil.h && rm zutil.h.bak",
-    ],
+    patches = ["//build/bazel:zlib.patch"],
     sha256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
     strip_prefix = "zlib-1.3.1",
     urls = ["http://zlib.net/fossils/zlib-1.3.1.tar.gz"],
