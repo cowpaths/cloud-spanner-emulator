@@ -110,7 +110,7 @@ commands:
           when: always
           command: |
             mkdir -p /tmp/test-results
-            testlogs_dir="$(bazel info output_path 2>/dev/null)/k8-opt/testlogs" || true
+            testlogs_dir="$(bazel info bazel-testlogs 2>/dev/null)" || true
             if [[ -d "${testlogs_dir}" ]]; then
               find "${testlogs_dir}" -name "test.xml" | while read -r xml; do
                 rel="${xml#${testlogs_dir}/}"
@@ -136,7 +136,7 @@ jobs:
       - run:
           name: Build all targets
           command: |
-            bazel build -c opt \
+            bazel build \
               --disk_cache=/tmp/bazel-disk-cache \
               -- ... -third_party/...
           no_output_timeout: 30m
@@ -154,7 +154,7 @@ jobs:
       - run:
           name: Run all tests
           command: |
-            bazel test -c opt \
+            bazel test \
               --disk_cache=/tmp/bazel-disk-cache \
               --test_output=errors \
               -- ... -third_party/...
@@ -172,7 +172,7 @@ jobs:
       - run:
           name: Build all targets
           command: |
-            bazel build -c opt \
+            bazel build \
               --disk_cache=/tmp/bazel-disk-cache \
               -- ... -third_party/...
           no_output_timeout: 30m
@@ -190,7 +190,7 @@ jobs:
       - run:
           name: Run all tests
           command: |
-            bazel test -c opt \
+            bazel test \
               --disk_cache=/tmp/bazel-disk-cache \
               --test_output=errors \
               -- ... -third_party/...
