@@ -1,0 +1,149 @@
+version: 2.1
+
+executors:
+  linux:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: xlarge
+  macos:
+    macos:
+      xcode: "16.2.0"
+    resource_class: macos.m1.large.gen1
+
+commands:
+  install-bazelisk:
+    steps:
+      - run:
+          name: Install Bazelisk
+          command: |
+            if [[ "$(uname)" == "Darwin" ]]; then
+              brew install bazelisk
+            else
+              sudo curl -fsSL https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 \
+                -o /usr/local/bin/bazel
+              sudo chmod +x /usr/local/bin/bazel
+            fi
+            bazel --version
+
+  restore-bazel-cache:
+    parameters:
+      platform:
+        type: string
+    steps:
+      - restore_cache:
+          keys:
+            - bazel-v1-<< parameters.platform >>-{{ checksum "WORKSPACE" }}-{{ checksum ".bazelversion" }}
+            - bazel-v1-<< parameters.platform >>-{{ checksum "WORKSPACE" }}
+            - bazel-v1-<< parameters.platform >>-
+
+  save-bazel-cache:
+    parameters:
+      platform:
+        type: string
+    steps:
+      - save_cache:
+          key: bazel-v1-<< parameters.platform >>-{{ checksum "WORKSPACE" }}-{{ checksum ".bazelversion" }}-{{ epoch }}
+          paths:
+            - /tmp/bazel-disk-cache
+
+  collect-test-results:
+    steps:
+      - run:
+          name: Collect test results
+          when: always
+          command: |
+            mkdir -p /tmp/test-results
+            testlogs_dir="$(bazel info output_path 2>/dev/null)/k8-opt/testlogs" || true
+            if [[ -d "${testlogs_dir}" ]]; then
+              find "${testlogs_dir}" -name "test.xml" | while read -r xml; do
+                rel="${xml#${testlogs_dir}/}"
+                target_name="$(echo "${rel}" | sed 's|/test.xml$||' | tr '/' '_')"
+                cp "${xml}" "/tmp/test-results/${target_name}.xml"
+              done
+            fi
+      - store_test_results:
+          path: /tmp/test-results
+      - store_artifacts:
+          path: /tmp/test-results
+          destination: test-results
+
+jobs:
+  build-linux:
+    executor: linux
+    steps:
+      - checkout
+      - install-bazelisk
+      - restore-bazel-cache:
+          platform: linux
+      - run:
+          name: Build all targets
+          command: |
+            bazel build -c opt \
+              --disk_cache=/tmp/bazel-disk-cache \
+              -- ... -third_party/spanner_pg/src/...
+          no_output_timeout: 30m
+      - save-bazel-cache:
+          platform: linux
+
+  test-linux:
+    executor: linux
+    steps:
+      - checkout
+      - install-bazelisk
+      - restore-bazel-cache:
+          platform: linux
+      - run:
+          name: Run all tests
+          command: |
+            bazel test -c opt \
+              --disk_cache=/tmp/bazel-disk-cache \
+              --test_output=errors \
+              -- ... -third_party/spanner_pg/src/...
+          no_output_timeout: 30m
+      - collect-test-results
+
+  build-macos:
+    executor: macos
+    steps:
+      - checkout
+      - install-bazelisk
+      - restore-bazel-cache:
+          platform: macos
+      - run:
+          name: Build all targets
+          command: |
+            bazel build -c opt \
+              --disk_cache=/tmp/bazel-disk-cache \
+              -- ... -third_party/spanner_pg/src/...
+          no_output_timeout: 30m
+      - save-bazel-cache:
+          platform: macos
+
+  test-macos:
+    executor: macos
+    steps:
+      - checkout
+      - install-bazelisk
+      - restore-bazel-cache:
+          platform: macos
+      - run:
+          name: Run all tests
+          command: |
+            bazel test -c opt \
+              --disk_cache=/tmp/bazel-disk-cache \
+              --test_output=errors \
+              -- ... -third_party/spanner_pg/src/...
+          no_output_timeout: 30m
+      - collect-test-results
+
+workflows:
+  build-and-test:
+    jobs:
+      - build-linux
+      - test-linux:
+          requires:
+            - build-linux
+      - build-macos
+      - test-macos:
+          requires:
+            - build-macos
