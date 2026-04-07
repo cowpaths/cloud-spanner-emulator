@@ -19,4 +19,8 @@ build --copt   -Wno-sign-compare
 build --copt   -Wno-deprecated-declarations
 build --copt   -Wno-return-type
 build --copt   -Wno-unused-but-set-parameter
-build --copt   -Wno-missing-template-arg-list-after-template-kw
+# Automatically apply build:macos on macOS, build:linux on Linux, etc.
+build --enable_platform_specific_config
+
+# Clang 17+ warns on ZetaSQL code; GCC doesn't recognize this flag.
+build:macos --copt   -Wno-missing-template-arg-list-after-template-kw
