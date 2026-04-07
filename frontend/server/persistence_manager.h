@@ -19,9 +19,12 @@
 
 #include <memory>
 #include <string>
+#include <thread>  // NOLINT
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "backend/storage/persistence.pb.h"
 #include "backend/storage/wal_writer.h"
 #include "frontend/server/environment.h"
@@ -50,6 +53,13 @@ class PersistenceManager {
   // Writes a snapshot and clears the WAL.
   absl::Status SaveState(ServerEnv* env);
 
+  // Starts periodic background snapshots at the given interval.
+  // Does nothing if interval is zero or negative.
+  void StartPeriodicSnapshots(ServerEnv* env, absl::Duration interval);
+
+  // Stops the background snapshot thread. Called before shutdown.
+  void StopPeriodicSnapshots();
+
   // Returns the WAL writer (used by Database creation to wrap storage).
   std::shared_ptr<backend::WalWriter> wal_writer() { return wal_writer_; }
 
@@ -68,8 +78,15 @@ class PersistenceManager {
   absl::Status ReplayEntry(
       const backend::WalEntry& entry, ServerEnv* env);
 
+  void SnapshotLoop(ServerEnv* env, absl::Duration interval);
+
   std::string data_dir_;
   std::shared_ptr<backend::WalWriter> wal_writer_;
+
+  // Background snapshot thread state.
+  absl::Mutex snapshot_mu_;
+  bool snapshot_stop_ ABSL_GUARDED_BY(snapshot_mu_) = false;
+  std::thread snapshot_thread_;
 };
 
 }  // namespace frontend

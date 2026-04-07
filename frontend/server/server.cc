@@ -34,6 +34,7 @@
 #include "google/spanner/v1/spanner.pb.h"
 #include "google/spanner/v1/transaction.pb.h"
 #include "absl/memory/memory.h"
+#include "absl/time/time.h"
 #include "common/constants.h"
 #include "common/errors.h"
 #include "common/limits.h"
@@ -329,6 +330,9 @@ std::unique_ptr<Server> Server::Create(const Server::Options& options) {
     }
     ABSL_LOG(INFO) << "Restored persistent state from: "
                    << options.data_dir;
+    server->persistence_manager_->StartPeriodicSnapshots(
+        server->env(),
+        absl::Seconds(options.snapshot_interval_secs));
   }
 
   // Actually start the server.
@@ -345,6 +349,7 @@ void Server::WaitForShutdown() { grpc_server_->Wait(); }
 
 void Server::Shutdown() {
   if (persistence_manager_) {
+    persistence_manager_->StopPeriodicSnapshots();
     auto status = persistence_manager_->SaveState(env_.get());
     if (!status.ok()) {
       ABSL_LOG(ERROR) << "Failed to save persistent state: " << status;

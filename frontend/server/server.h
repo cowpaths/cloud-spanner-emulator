@@ -56,6 +56,7 @@ class Server {
   struct Options {
     std::string server_address;
     std::string data_dir;  // Empty = no persistence
+    int snapshot_interval_secs = 3600;  // 0 = disabled
   };
 
   // Returns an initialized Server, or nullptr if the initialization failed.

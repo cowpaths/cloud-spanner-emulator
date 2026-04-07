@@ -48,6 +48,11 @@ ABSL_FLAG(std::string, data_dir, "",
           "When empty (default), the emulator runs in pure in-memory mode "
           "and all data is lost on shutdown.");
 
+ABSL_FLAG(int, snapshot_interval_secs, 3600,
+          "Interval in seconds between periodic snapshots. "
+          "Set to 0 to disable periodic snapshots (only snapshot on shutdown). "
+          "Default is 3600 (1 hour).");
+
 ABSL_FLAG(
     int, abort_current_transaction_probability, 20,
     "The probability that the emulator will try to abort the current "
@@ -82,6 +87,10 @@ void set_abort_current_transaction_probability(int probability) {
 }
 
 std::string data_dir() { return absl::GetFlag(FLAGS_data_dir); }
+
+int snapshot_interval_secs() {
+  return absl::GetFlag(FLAGS_snapshot_interval_secs);
+}
 
 }  // namespace config
 }  // namespace emulator

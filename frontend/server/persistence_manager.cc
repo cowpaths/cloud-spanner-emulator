@@ -400,6 +400,49 @@ absl::Status PersistenceManager::SaveState(ServerEnv* env) {
   return absl::OkStatus();
 }
 
+void PersistenceManager::StartPeriodicSnapshots(ServerEnv* env,
+                                                 absl::Duration interval) {
+  if (interval <= absl::ZeroDuration()) {
+    return;
+  }
+  snapshot_thread_ = std::thread(&PersistenceManager::SnapshotLoop, this, env,
+                                 interval);
+}
+
+void PersistenceManager::StopPeriodicSnapshots() {
+  {
+    absl::MutexLock lock(&snapshot_mu_);
+    snapshot_stop_ = true;
+  }
+  if (snapshot_thread_.joinable()) {
+    snapshot_thread_.join();
+  }
+}
+
+void PersistenceManager::SnapshotLoop(ServerEnv* env,
+                                       absl::Duration interval) {
+  while (true) {
+    {
+      absl::MutexLock lock(&snapshot_mu_);
+      auto stop = [this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(snapshot_mu_) {
+        return snapshot_stop_;
+      };
+      if (snapshot_mu_.AwaitWithTimeout(absl::Condition(&stop), interval)) {
+        // Stop was requested.
+        return;
+      }
+    }
+    // Interval elapsed — take a snapshot.
+    ABSL_LOG(INFO) << "Periodic snapshot starting.";
+    auto status = SaveState(env);
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Periodic snapshot failed: " << status;
+    } else {
+      ABSL_LOG(INFO) << "Periodic snapshot completed.";
+    }
+  }
+}
+
 }  // namespace frontend
 }  // namespace emulator
 }  // namespace spanner

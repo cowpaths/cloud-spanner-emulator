@@ -56,6 +56,10 @@ int main(int argc, char** argv) {
       "      When empty (default), the emulator runs in pure in-memory\n"
       "      mode and all data is lost on shutdown.\n"
       "\n"
+      "  --snapshot_interval_secs=SECONDS\n"
+      "      Interval between periodic snapshots (default: 3600 = 1 hour).\n"
+      "      Set to 0 to disable periodic snapshots.\n"
+      "\n"
       "  --enable_fault_injection\n"
       "      Enable fault injection for testing application error handling.\n"
       "\n"
@@ -67,6 +71,8 @@ int main(int argc, char** argv) {
   Server::Options options;
   options.server_address = google::spanner::emulator::config::grpc_host_port();
   options.data_dir = google::spanner::emulator::config::data_dir();
+  options.snapshot_interval_secs =
+      google::spanner::emulator::config::snapshot_interval_secs();
   std::unique_ptr<Server> server = Server::Create(options);
   if (!server) {
     ABSL_LOG(ERROR) << "Failed to start gRPC server.";
