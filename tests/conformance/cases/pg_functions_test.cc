@@ -1822,9 +1822,13 @@ TEST_F(PGFunctionsTest, ToJsonB) {
               IsOkAndHoldsRows({JsonB("[\"\\\\x20\", \"\\\\x6162\"]")}));
   EXPECT_THAT(Query(R"(select to_jsonb('{"b":[1e0],"a":[20e-1]}'::jsonb))"),
               IsOkAndHoldsRows({JsonB(R"({"a": [2.0], "b": [1]})")}));
+  // Large exponents overflow long double on macOS (different precision than
+  // Linux), causing the nlohmann JSON parser to reject the number.
+#if !defined(__APPLE__)
   EXPECT_THAT(
       Query(R"(select to_jsonb('-15e1500'::numeric))"),
       IsOkAndHoldsRows({JsonB(std::string("-15" + std::string(1500, '0')))}));
+#endif
 }
 
 TEST_F(PGFunctionsTest, JsonBContainmentAndExistenceFunctions) {

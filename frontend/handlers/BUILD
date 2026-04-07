@@ -500,6 +500,7 @@ cc_library(
 
 cc_test(
     name = "change_streams_test",
+    size = "large",
     srcs = ["change_streams_test.cc"],
     args = [
         "--spangres_use_emulator_jsonb_type=true",

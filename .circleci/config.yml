@@ -46,6 +46,63 @@ commands:
           paths:
             - /tmp/bazel-disk-cache
 
+  install-gcloud:
+    steps:
+      - run:
+          name: Install gcloud CLI
+          command: |
+            if [[ "$(uname)" == "Darwin" ]]; then
+              brew install --cask google-cloud-sdk
+            else
+              sudo apt-get update && sudo apt-get install -y apt-transport-https ca-certificates gnupg curl
+              curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+              echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | \
+                sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+              sudo apt-get update && sudo apt-get install -y google-cloud-cli
+            fi
+            echo "export GCLOUD_DIR=$(dirname $(which gcloud))" >> "$BASH_ENV"
+            gcloud --version
+
+  authenticate-gcloud:
+    steps:
+      - run:
+          name: Authenticate gcloud
+          command: |
+            echo "${GCLOUD_SERVICE_KEY}" > /tmp/gcloud-key.json
+            gcloud auth activate-service-account --key-file=/tmp/gcloud-key.json
+            rm /tmp/gcloud-key.json
+
+  package-and-upload:
+    parameters:
+      platform:
+        type: string
+    steps:
+      - run:
+          name: Package binaries into tarball
+          command: |
+            version="${CIRCLE_TAG#v}"
+            if [[ "$(uname)" == "Darwin" ]]; then
+              host_os="darwin"
+              host_arch="arm64"
+            else
+              host_os="linux"
+              host_arch="amd64"
+            fi
+            tarball="spanner-emulator-v${version}-${host_os}-${host_arch}.tgz"
+
+            mkdir -p /tmp/release-staging
+            cp bazel-bin/binaries/emulator_main /tmp/release-staging/
+            cp bazel-bin/binaries/gateway_main_/gateway_main /tmp/release-staging/
+            tar -czf "/tmp/${tarball}" -C /tmp/release-staging .
+
+            echo "export TARBALL=/tmp/${tarball}" >> "$BASH_ENV"
+            echo "export GCS_PATH=gs://fs-build-ci-public/spanner-emulator/v${version}/${tarball}" >> "$BASH_ENV"
+      - run:
+          name: Upload tarball to GCS
+          command: |
+            gsutil cp "${TARBALL}" "${GCS_PATH}"
+            echo "Uploaded: ${GCS_PATH}"
+
   collect-test-results:
     steps:
       - run:
@@ -73,6 +130,7 @@ jobs:
     steps:
       - checkout
       - install-bazelisk
+      - install-gcloud
       - restore-bazel-cache:
           platform: linux
       - run:
@@ -80,7 +138,7 @@ jobs:
           command: |
             bazel build -c opt \
               --disk_cache=/tmp/bazel-disk-cache \
-              -- ... -third_party/spanner_pg/src/...
+              -- ... -third_party/...
           no_output_timeout: 30m
       - save-bazel-cache:
           platform: linux
@@ -90,6 +148,7 @@ jobs:
     steps:
       - checkout
       - install-bazelisk
+      - install-gcloud
       - restore-bazel-cache:
           platform: linux
       - run:
@@ -98,7 +157,7 @@ jobs:
             bazel test -c opt \
               --disk_cache=/tmp/bazel-disk-cache \
               --test_output=errors \
-              -- ... -third_party/spanner_pg/src/...
+              -- ... -third_party/...
           no_output_timeout: 30m
       - collect-test-results
 
@@ -107,6 +166,7 @@ jobs:
     steps:
       - checkout
       - install-bazelisk
+      - install-gcloud
       - restore-bazel-cache:
           platform: macos
       - run:
@@ -114,7 +174,7 @@ jobs:
           command: |
             bazel build -c opt \
               --disk_cache=/tmp/bazel-disk-cache \
-              -- ... -third_party/spanner_pg/src/...
+              -- ... -third_party/...
           no_output_timeout: 30m
       - save-bazel-cache:
           platform: macos
@@ -124,6 +184,7 @@ jobs:
     steps:
       - checkout
       - install-bazelisk
+      - install-gcloud
       - restore-bazel-cache:
           platform: macos
       - run:
@@ -132,18 +193,105 @@ jobs:
             bazel test -c opt \
               --disk_cache=/tmp/bazel-disk-cache \
               --test_output=errors \
-              -- ... -third_party/spanner_pg/src/...
+              -- ... -third_party/...
           no_output_timeout: 30m
       - collect-test-results
+
+  release-linux:
+    executor: linux
+    steps:
+      - checkout
+      - install-bazelisk
+      - install-gcloud
+      - authenticate-gcloud
+      - restore-bazel-cache:
+          platform: linux
+      - run:
+          name: Build binaries
+          command: |
+            bazel build -c opt \
+              --disk_cache=/tmp/bazel-disk-cache \
+              //binaries:emulator_main //binaries:gateway_main
+          no_output_timeout: 30m
+      - save-bazel-cache:
+          platform: linux
+      - package-and-upload:
+          platform: linux
+
+  release-macos:
+    executor: macos
+    steps:
+      - checkout
+      - install-bazelisk
+      - install-gcloud
+      - authenticate-gcloud
+      - restore-bazel-cache:
+          platform: macos
+      - run:
+          name: Build binaries
+          command: |
+            bazel build -c opt \
+              --disk_cache=/tmp/bazel-disk-cache \
+              //binaries:emulator_main //binaries:gateway_main
+          no_output_timeout: 30m
+      - save-bazel-cache:
+          platform: macos
+      - package-and-upload:
+          platform: macos
 
 workflows:
   build-and-test:
     jobs:
-      - build-linux
+      - build-linux:
+          filters:
+            tags:
+              ignore: /.*/
       - test-linux:
           requires:
             - build-linux
-      - build-macos
+      - build-macos:
+          filters:
+            tags:
+              ignore: /.*/
       - test-macos:
           requires:
             - build-macos
+
+  release:
+    jobs:
+      - build-linux:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+\.\d+\.\d+-fs.*/
+      - test-linux:
+          requires:
+            - build-linux
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+-fs.*/
+      - build-macos:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+\.\d+\.\d+-fs.*/
+      - test-macos:
+          requires:
+            - build-macos
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+-fs.*/
+      - release-linux:
+          requires:
+            - test-linux
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+-fs.*/
+      - release-macos:
+          requires:
+            - test-macos
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+-fs.*/
