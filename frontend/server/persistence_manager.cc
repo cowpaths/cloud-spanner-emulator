@@ -16,6 +16,7 @@
 
 #include "frontend/server/persistence_manager.h"
 
+#include <fcntl.h>
 #include <sys/stat.h>
 
 #include <algorithm>
@@ -49,26 +50,21 @@ namespace {
 
 // Creates a directory if it does not already exist.
 absl::Status EnsureDirectoryExists(const std::string& path) {
-  struct stat st;
-  if (stat(path.c_str(), &st) == 0) {
-    if (S_ISDIR(st.st_mode)) {
+  if (mkdir(path.c_str(), 0755) == 0) {
+    return absl::OkStatus();
+  }
+  if (errno == EEXIST) {
+    // Verify the existing path is actually a directory.
+    struct stat st;
+    if (fstatat(AT_FDCWD, path.c_str(), &st, 0) == 0 && S_ISDIR(st.st_mode)) {
       return absl::OkStatus();
     }
     return absl::FailedPreconditionError(
         absl::StrCat("Path exists but is not a directory: ", path));
   }
-  if (mkdir(path.c_str(), 0755) != 0) {
-    return absl::InternalError(
-        absl::StrCat("Failed to create directory: ", path,
-                      ", errno: ", strerror(errno)));
-  }
-  return absl::OkStatus();
-}
-
-// Returns true if the file at the given path exists.
-bool FileExists(const std::string& path) {
-  struct stat st;
-  return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+  return absl::InternalError(
+      absl::StrCat("Failed to create directory: ", path,
+                    ", errno: ", strerror(errno)));
 }
 
 }  // namespace
@@ -120,20 +116,19 @@ std::string PersistenceManager::wal_directory() const {
 
 absl::Status PersistenceManager::RestoreState(ServerEnv* env) {
   // Step 1: Load snapshot if it exists.
-  if (FileExists(snapshot_path())) {
-    ABSL_LOG(INFO) << "Loading snapshot from: " << snapshot_path();
-    auto snapshot_time_or =
-        backend::SnapshotLoader::LoadSnapshot(snapshot_path(), env);
-    if (!snapshot_time_or.ok()) {
-      return absl::Status(
-          snapshot_time_or.status().code(),
-          absl::StrCat("Failed to load snapshot: ",
-                        snapshot_time_or.status().message()));
-    }
+  ABSL_LOG(INFO) << "Loading snapshot from: " << snapshot_path();
+  auto snapshot_time_or =
+      backend::SnapshotLoader::LoadSnapshot(snapshot_path(), env);
+  if (snapshot_time_or.ok()) {
     ABSL_LOG(INFO) << "Snapshot loaded successfully.";
-  } else {
+  } else if (absl::IsNotFound(snapshot_time_or.status())) {
     ABSL_LOG(INFO) << "No snapshot found at: " << snapshot_path()
                    << ", starting fresh.";
+  } else {
+    return absl::Status(
+        snapshot_time_or.status().code(),
+        absl::StrCat("Failed to load snapshot: ",
+                      snapshot_time_or.status().message()));
   }
 
   // Step 2: Read and replay WAL entries.
