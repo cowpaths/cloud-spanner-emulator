@@ -8,7 +8,7 @@ executors:
   macos:
     macos:
       xcode: "16.2.0"
-    resource_class: macos.m1.large.gen1
+    resource_class: macos.m1.medium.gen1
 
 commands:
   install-bazelisk:
