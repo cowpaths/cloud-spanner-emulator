@@ -170,11 +170,11 @@ jobs:
       - restore-bazel-cache:
           platform: macos
       - run:
-          name: Build all targets
+          name: Build binaries
           command: |
             bazel build \
               --disk_cache=/tmp/bazel-disk-cache \
-              -- ... -third_party/...
+              //binaries:emulator_main //binaries:gateway_main
           no_output_timeout: 30m
       - save-bazel-cache:
           platform: macos
@@ -188,12 +188,30 @@ jobs:
       - restore-bazel-cache:
           platform: macos
       - run:
-          name: Run all tests
+          name: Run tests (excluding backend/storage)
           command: |
             bazel test \
               --disk_cache=/tmp/bazel-disk-cache \
               --test_output=errors \
-              -- ... -third_party/...
+              -- ... -third_party/... -//backend/storage/...
+          no_output_timeout: 30m
+      - collect-test-results
+
+  test-macos-storage:
+    executor: macos
+    steps:
+      - checkout
+      - install-bazelisk
+      - install-gcloud
+      - restore-bazel-cache:
+          platform: macos
+      - run:
+          name: Run backend/storage tests
+          command: |
+            bazel test \
+              --disk_cache=/tmp/bazel-disk-cache \
+              --test_output=errors \
+              -- //backend/storage/...
           no_output_timeout: 30m
       - collect-test-results
 
@@ -256,6 +274,9 @@ workflows:
       - test-macos:
           requires:
             - build-macos
+      - test-macos-storage:
+          requires:
+            - build-macos
 
   release:
     jobs:
@@ -283,6 +304,12 @@ workflows:
           filters:
             tags:
               only: /^v\d+\.\d+\.\d+-fs.*/
+      - test-macos-storage:
+          requires:
+            - build-macos
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+-fs.*/
       - release-linux:
           requires:
             - test-linux
@@ -292,6 +319,7 @@ workflows:
       - release-macos:
           requires:
             - test-macos
+            - test-macos-storage
           filters:
             tags:
               only: /^v\d+\.\d+\.\d+-fs.*/
