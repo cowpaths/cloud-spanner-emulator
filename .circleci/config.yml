@@ -8,7 +8,7 @@ executors:
   macos:
     macos:
       xcode: "26.4.0"
-    resource_class: m4pro.medium
+    resource_class: m4pro.large
 
 commands:
   install-bazelisk:
