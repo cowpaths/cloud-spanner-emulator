@@ -42,6 +42,7 @@
 #include "google/cloud/status_or.h"
 #include "common/constants.h"
 #include "tests/common/file_based_schema_reader.h"
+#include "tests/common/file_based_test_runner.h"
 #include "tests/conformance/common/environment.h"
 #include "absl/status/status.h"
 

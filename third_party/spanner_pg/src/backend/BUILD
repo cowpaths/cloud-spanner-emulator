@@ -83,10 +83,14 @@ cc_library(
     ],
     features = ["-use_header_modules"],  # Incompatible with -fexceptions.
     linkopts = [
-        "-ldl",
         "-lpthread",
-        "-lrt",
-    ],
+    ] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": [
+            "-ldl",
+            "-lrt",
+        ],
+    }),
     deps = [
         "//third_party/spanner_pg/src/backend/access/brin",
         "//third_party/spanner_pg/src/backend/access/common",

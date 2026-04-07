@@ -1,0 +1,11 @@
+diff --git a/riegeli/bytes/cfile_internal.cc b/riegeli/bytes/cfile_internal.cc
+--- a/riegeli/bytes/cfile_internal.cc
++++ b/riegeli/bytes/cfile_internal.cc
+@@ -24,6 +24,7 @@
+
+ #include <fcntl.h>
+ #include <stdio.h>
++#include <unistd.h>
+
+ #include <cerrno>
+

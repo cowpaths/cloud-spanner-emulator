@@ -266,6 +266,8 @@ http_archive(
 
 http_archive(
     name = "com_googlesource_code_riegeli",
+    patch_args = ["-p1"],
+    patches = ["//build/bazel:riegeli.patch"],
     sha256 = "603c4d35224cf00f1d4a68c45cc4c5ca598613886886f93e1cffbe49a18aa6ea",
     strip_prefix = "riegeli-3966874f4ce0b05bb32ae184f1fb44411992e12d",
     url = "https://github.com/google/riegeli/archive/3966874f4ce0b05bb32ae184f1fb44411992e12d.tar.gz",
@@ -276,6 +278,19 @@ http_archive(
     sha256 = "79cc6d09d02706c5a73e900ea842b5b3dae160f371b6654774947fe781851423",
     strip_prefix = "protobuf-27.5",
     urls = ["https://github.com/protocolbuffers/protobuf/releases/download/v27.5/protobuf-27.5.tar.gz"],
+)
+
+################################################################################
+# zlib - must be defined before protobuf_deps() which also defines @zlib,     #
+# so that our macOS-patched version takes precedence (first definition wins).  #
+################################################################################
+
+http_archive(
+    name = "zlib",
+    build_file = "//build/bazel:zlib.BUILD",
+    sha256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+    strip_prefix = "zlib-1.3.1",
+    urls = ["https://zlib.net/fossils/zlib-1.3.1.tar.gz"],
 )
 
 load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
@@ -482,12 +497,4 @@ http_archive(
     sha256 = "3b1c3b46e416d36931efd34663122d7f51b550c87f74de2d38249516fe7d8be5",
     strip_prefix = "zstd-1.5.6/lib",
     urls = ["https://github.com/facebook/zstd/archive/v1.5.6.zip"],
-)
-
-http_archive(
-    name = "zlib",
-    build_file = "//build/bazel:zlib.BUILD",
-    sha256 = "c3e5e9fdd5004dcb542feda5ee4f0ff0744628baf8ed2dd5d66f8ca1197cb1a1",
-    strip_prefix = "zlib-1.3.1",
-    urls = ["http://zlib.net/fossils/zlib-1.3.1.tar.gz"],
 )

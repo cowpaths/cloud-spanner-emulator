@@ -124,11 +124,6 @@ absl::StatusOr<FileBasedSchemaSet> ReadSchemaSetFromFile(
   return schema_set;
 }
 
-std::string GetRunfilesDir(const std::string& dir) {
-  return GetTestFileDir(
-      absl::StrCat("com_google_cloud_spanner_emulator", "/", dir));
-}
-
 }  // namespace test
 }  // namespace emulator
 }  // namespace spanner

@@ -46,6 +46,7 @@ cc_library(
         "//common:constants",
         "//frontend/server",
         "//tests/common:file_based_schema_reader",
+        "//tests/common:file_based_test_runner",
         "//tests/common:proto_matchers",
         "@com_github_google_benchmark//:benchmark",
         "@com_github_googleapis_google_cloud_cpp//:common",
