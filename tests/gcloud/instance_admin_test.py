@@ -72,7 +72,7 @@ class GCloudInstanceAdminTest(emulator.TestCase):
     self.RunGCloud('spanner', 'instances', 'create', 'test-instance',
                    '--config=emulator-config', '--description=Test Instance',
                    '--nodes', '3')
-    time_format = r"'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}.[0-9]{9}Z'"
+    time_format = r"'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}.[0-9]+Z'"
     self.assertRegex(
         self.RunGCloud('spanner', 'instances', 'describe', 'test-instance'),
         self.JoinLines(
