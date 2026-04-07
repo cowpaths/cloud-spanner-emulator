@@ -68,7 +68,7 @@ commands:
       - run:
           name: Authenticate gcloud
           command: |
-            echo "${GCLOUD_SERVICE_KEY}" > /tmp/gcloud-key.json
+            echo "${OPS_GCLOUD_CREDS}" > /tmp/gcloud-key.json
             gcloud auth activate-service-account --key-file=/tmp/gcloud-key.json
             rm /tmp/gcloud-key.json
 
