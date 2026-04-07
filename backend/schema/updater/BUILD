@@ -214,6 +214,7 @@ cc_library(
 
 cc_test(
     name = "schema_updater_test",
+    size = "large",
     srcs = ["schema_updater_test.cc"],
     args = [
         "--spangres_use_emulator_jsonb_type=true",
