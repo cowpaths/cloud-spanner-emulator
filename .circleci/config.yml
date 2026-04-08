@@ -36,19 +36,17 @@ commands:
             - bazel-v1-<< parameters.platform >>-{{ checksum "WORKSPACE" }}
             - bazel-v1-<< parameters.platform >>-
       - run:
-          name: Prune Bazel disk cache to 15GB
+          name: Prune large files from Bazel disk cache
           command: |
             CACHE_DIR=/tmp/bazel-disk-cache
-            MAX_KB=$((15 * 1024 * 1024))
             if [[ -d "$CACHE_DIR" ]]; then
-              current_kb=$(du -sk "$CACHE_DIR" | cut -f1)
-              echo "Disk cache: $((current_kb / 1024))MB (limit: $((MAX_KB / 1024))MB)"
-              while [[ $current_kb -gt $MAX_KB ]]; do
-                # Delete 100 least-recently-used files per iteration.
-                ls -tur "$CACHE_DIR" | head -100 | xargs -I{} rm -f "$CACHE_DIR/{}"
-                current_kb=$(du -sk "$CACHE_DIR" | cut -f1)
-              done
-              echo "Disk cache after prune: $((current_kb / 1024))MB"
+              echo "Disk cache before prune: $(du -sh "$CACHE_DIR" | cut -f1)"
+              # Delete cached files over 100MB. These are linked test binaries
+              # that dominate cache size (~38GB) but are fast to re-link.
+              # Small compilation outputs (.o/.a ~1.7GB) are expensive to
+              # rebuild and are preserved.
+              find "$CACHE_DIR" -type f -size +100M -delete
+              echo "Disk cache after prune: $(du -sh "$CACHE_DIR" | cut -f1)"
             fi
 
   save-bazel-cache:
