@@ -134,10 +134,11 @@ absl::Status PersistenceManager::RestoreState(ServerEnv* env) {
   // Step 2: Read and replay WAL entries.
   auto wal_records_or = backend::WalWriter::ReadAll(wal_directory());
   if (!wal_records_or.ok()) {
-    return absl::Status(
-        wal_records_or.status().code(),
-        absl::StrCat("Failed to read WAL: ",
-                      wal_records_or.status().message()));
+    ABSL_LOG(WARNING) << "Failed to read WAL: "
+                      << wal_records_or.status().message()
+                      << ". Continuing with snapshot data only."
+                      << " Some recent changes may be lost.";
+    return absl::OkStatus();
   }
 
   auto records = std::move(*wal_records_or);
@@ -202,6 +203,12 @@ absl::Status PersistenceManager::ReplayMetadataChange(
       return absl::InternalError(
           absl::StrCat("Failed to parse instance proto for: ",
                         pi.instance_uri()));
+    }
+    // Clear node_count if both node_count and processing_units are set,
+    // since CreateInstance rejects that combination.
+    if (instance_proto.node_count() > 0 &&
+        instance_proto.processing_units() > 0) {
+      instance_proto.clear_node_count();
     }
     auto result = env->instance_manager()->CreateInstance(
         pi.instance_uri(), instance_proto);

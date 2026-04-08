@@ -211,6 +211,61 @@ TEST_F(WalWriterTest, CreateResumesSequenceNumbering) {
   EXPECT_EQ(records[2].entry().sequence_number(), 2);
 }
 
+TEST_F(WalWriterTest, CreateSkipsUnreadableWalFileAndContinues) {
+  // Write records across two segments.
+  {
+    ZETASQL_ASSERT_OK_AND_ASSIGN(auto writer, WalWriter::Create(test_dir_));
+    ZETASQL_EXPECT_OK(writer->Append(MakeRecord("db1")));
+    ZETASQL_EXPECT_OK(writer->Append(MakeRecord("db2")));
+    ZETASQL_ASSERT_OK(writer->Rotate());
+    ZETASQL_EXPECT_OK(writer->Append(MakeRecord("db3")));
+    EXPECT_EQ(writer->current_sequence_number(), 3);
+  }
+
+  // Make the second segment unreadable.
+  std::string wal_path = test_dir_ + "/wal-000001.log";
+  ASSERT_EQ(chmod(wal_path.c_str(), 0000), 0);
+
+  // Create should succeed — it skips the unreadable file and picks up the
+  // sequence number from the first segment (which had records 0 and 1).
+  ZETASQL_ASSERT_OK_AND_ASSIGN(auto writer, WalWriter::Create(test_dir_));
+  // Sequence should resume from the readable segment's max (1) + 1 = 2,
+  // not reset to 0.
+  EXPECT_GE(writer->current_sequence_number(), 2);
+
+  // Restore permissions for cleanup.
+  chmod(wal_path.c_str(), 0644);
+}
+
+TEST_F(WalWriterTest, CreateHandlesSingleUnreadableWalFile) {
+  // Write records to a single segment.
+  {
+    ZETASQL_ASSERT_OK_AND_ASSIGN(auto writer, WalWriter::Create(test_dir_));
+    ZETASQL_EXPECT_OK(writer->Append(MakeRecord("db1")));
+    ZETASQL_EXPECT_OK(writer->Append(MakeRecord("db2")));
+    EXPECT_EQ(writer->current_sequence_number(), 2);
+  }
+
+  // Make the only WAL file unreadable.
+  std::string wal_path = test_dir_ + "/wal-000000.log";
+  ASSERT_EQ(chmod(wal_path.c_str(), 0000), 0);
+
+  // Create should still succeed — no readable files means sequence starts
+  // at 0, but a new segment is opened (segment 1), so the unreadable
+  // segment 0 won't be overwritten.
+  ZETASQL_ASSERT_OK_AND_ASSIGN(auto writer, WalWriter::Create(test_dir_));
+
+  // New records get written to a new segment file.
+  ZETASQL_EXPECT_OK(writer->Append(MakeRecord("db3")));
+
+  // Restore permissions for cleanup.
+  chmod(wal_path.c_str(), 0644);
+
+  // ReadAll can now read both files — the old records plus the new one.
+  ZETASQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
+  EXPECT_EQ(records.size(), 3);
+}
+
 }  // namespace
 }  // namespace backend
 }  // namespace emulator

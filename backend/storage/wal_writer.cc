@@ -175,39 +175,32 @@ absl::Status WalWriter::ScanExistingFiles() {
   }
   segment_number_ = max_segment + 1;
 
-  // Read the last file to find the highest sequence number.
-  std::string last_file_path =
-      absl::StrCat(wal_directory_, "/", files.back());
-  auto records_or = ReadFile(last_file_path);
-  if (!records_or.ok()) {
-    // If we can't read, start fresh from this segment.
-    LOG(WARNING) << "Could not read last WAL file: "
-                 << records_or.status().message();
-    next_sequence_number_ = 0;
-    return absl::OkStatus();
-  }
-
-  // Find max sequence number across all records in the last file.
-  int64_t max_seq = 0;
-  for (const auto& record : records_or.value()) {
-    if (record.has_entry() && record.entry().sequence_number() > max_seq) {
-      max_seq = record.entry().sequence_number();
+  // Scan files from newest to oldest to find the highest sequence number.
+  // If a file is unreadable, skip it and try earlier ones.
+  int64_t max_seq = -1;
+  for (int i = static_cast<int>(files.size()) - 1; i >= 0; --i) {
+    std::string path = absl::StrCat(wal_directory_, "/", files[i]);
+    auto records_or = ReadFile(path);
+    if (!records_or.ok()) {
+      LOG(WARNING) << "Skipping unreadable WAL file " << path << ": "
+                   << records_or.status().message()
+                   << ". Some WAL entries may be lost.";
+      continue;
     }
-  }
-
-  // Also scan earlier files if needed (the last file might be empty).
-  if (records_or.value().empty() && files.size() > 1) {
-    for (int i = static_cast<int>(files.size()) - 2; i >= 0; --i) {
-      std::string path = absl::StrCat(wal_directory_, "/", files[i]);
-      auto prev_records_or = ReadFile(path);
-      if (!prev_records_or.ok()) continue;
-      for (const auto& record : prev_records_or.value()) {
-        if (record.has_entry() && record.entry().sequence_number() > max_seq) {
-          max_seq = record.entry().sequence_number();
-        }
+    for (const auto& record : records_or.value()) {
+      // The sequence number lives in different places depending on record
+      // type. For entry records, Append() sets it inside the entry proto.
+      // For metadata/schema records, it's on the top-level WalRecord.
+      int64_t seq = record.sequence_number();
+      if (record.has_entry()) {
+        seq = std::max(seq, record.entry().sequence_number());
       }
-      if (!prev_records_or.value().empty()) break;
+      if (seq > max_seq) {
+        max_seq = seq;
+      }
     }
+    // Once we've found records, no need to scan further back.
+    if (!records_or.value().empty()) break;
   }
 
   next_sequence_number_ = max_seq + 1;

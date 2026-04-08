@@ -189,6 +189,14 @@ absl::StatusOr<absl::Time> SnapshotLoader::LoadSnapshot(
                         pi.instance_uri()));
     }
 
+    // The serialized proto may have both node_count and processing_units set
+    // (Instance::ToProto sets both), but CreateInstance rejects that. Clear
+    // node_count since processing_units is the canonical representation.
+    if (instance_proto.node_count() > 0 &&
+        instance_proto.processing_units() > 0) {
+      instance_proto.clear_node_count();
+    }
+
     auto result = env->instance_manager()->CreateInstance(
         pi.instance_uri(), instance_proto);
     if (!result.ok()) {
