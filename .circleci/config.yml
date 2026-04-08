@@ -111,6 +111,11 @@ commands:
             echo "Disk usage before cleanup:"
             df -h /
 
+            # Purge APFS snapshots and purgeable space (~30-70 GB)
+            # This reclaims the gap between "used + avail" and total disk size.
+            sudo tmutil deletelocalsnapshots / 2>/dev/null || true
+            sudo tmutil thinlocalsnapshots / 999999999999 2>/dev/null || true
+
             # Remove simulators and device platforms (~10+ GB)
             sudo rm -rf /Library/Developer/CoreSimulator
             sudo rm -rf /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform
@@ -124,6 +129,10 @@ commands:
             rm -rf ~/Library/Developer/Xcode/WatchOS\ DeviceSupport
             rm -rf ~/Library/Developer/Xcode/tvOS\ DeviceSupport
             rm -rf ~/Library/Developer/Xcode/Archives
+
+            # Remove Swift/DocC toolchains and documentation we don't need
+            sudo rm -rf /Library/Developer/Toolchains
+            rm -rf ~/Library/Developer/Shared/Documentation
 
             echo "Disk usage after cleanup:"
             df -h /
