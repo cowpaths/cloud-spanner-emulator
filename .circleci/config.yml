@@ -38,6 +38,7 @@ commands:
       - run:
           name: Prune Bazel disk cache to 15GB
           command: |
+            set +o pipefail
             CACHE_DIR=/tmp/bazel-disk-cache
             if [[ -d "$CACHE_DIR" ]]; then
               SIZE_MB=$(du -sm "$CACHE_DIR" | cut -f1)
@@ -48,9 +49,9 @@ commands:
                 # Delete oldest third of files (by access time) to get back under limit.
                 # Uses stat -f on macOS, stat -c on Linux.
                 if [[ "$(uname)" == "Darwin" ]]; then
-                  find "$CACHE_DIR" -type f -exec stat -f '%a %N' {} + | sort -n | head -n $(( $(find "$CACHE_DIR" -type f | wc -l) / 3 )) | cut -d' ' -f2- | xargs rm -f
+                  find "$CACHE_DIR" -type f -exec stat -f '%a %N' {} + | sort -n | head -n $(( $(find "$CACHE_DIR" -type f | wc -l) / 3 )) | cut -d' ' -f2- | xargs rm -f || true
                 else
-                  find "$CACHE_DIR" -type f -printf '%A@ %p\n' | sort -n | head -n $(( $(find "$CACHE_DIR" -type f | wc -l) / 3 )) | cut -d' ' -f2- | xargs rm -f
+                  find "$CACHE_DIR" -type f -printf '%A@ %p\n' | sort -n | head -n $(( $(find "$CACHE_DIR" -type f | wc -l) / 3 )) | cut -d' ' -f2- | xargs rm -f || true
                 fi
                 echo "Disk cache after prune: $(du -sh "$CACHE_DIR" | cut -f1)"
               fi
