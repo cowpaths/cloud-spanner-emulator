@@ -36,12 +36,12 @@ commands:
             - bazel-v1-<< parameters.platform >>-{{ checksum "WORKSPACE" }}
             - bazel-v1-<< parameters.platform >>-
       - run:
-          name: Prune Bazel disk cache to 50GB
+          name: Prune Bazel disk cache to 15GB
           command: |
             CACHE_DIR=/tmp/bazel-disk-cache
             if [[ -d "$CACHE_DIR" ]]; then
               SIZE_MB=$(du -sm "$CACHE_DIR" | cut -f1)
-              MAX_MB=$((50 * 1024))
+              MAX_MB=$((15 * 1024))
               echo "Disk cache size: ${SIZE_MB}MB (limit: ${MAX_MB}MB)"
               if [[ $SIZE_MB -gt $MAX_MB ]]; then
                 echo "Pruning oldest entries..."
