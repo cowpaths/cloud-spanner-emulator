@@ -43,6 +43,7 @@
 #include "backend/schema/updater/schema_updater.h"
 #include "backend/schema/updater/scoped_schema_change_lock.h"
 #include "backend/storage/in_memory_storage.h"
+#include "backend/storage/persistent_storage.h"
 #include "backend/transaction/options.h"
 #include "backend/transaction/read_only_transaction.h"
 #include "backend/transaction/read_write_transaction.h"
@@ -63,11 +64,20 @@ Database::Database()
 
 absl::StatusOr<std::unique_ptr<Database>> Database::Create(
     Clock* clock, std::string_view database_id,
-    const SchemaChangeOperation& schema_change_operation) {
+    const SchemaChangeOperation& schema_change_operation,
+    std::shared_ptr<WalWriter> wal_writer,
+    const std::string& database_uri) {
   auto database = absl::WrapUnique(new Database());
   database->clock_ = clock;
   database->database_id_ = database_id;
-  database->storage_ = std::make_unique<InMemoryStorage>();
+  if (wal_writer) {
+    ZETASQL_ASSIGN_OR_RETURN(
+        auto persistent,
+        PersistentStorage::Create(database_uri, std::move(wal_writer)));
+    database->storage_ = std::move(persistent);
+  } else {
+    database->storage_ = std::make_unique<InMemoryStorage>();
+  }
   database->lock_manager_ = std::make_unique<LockManager>(clock);
   database->type_factory_ = std::make_unique<zetasql::TypeFactory>();
   database->action_manager_ = std::make_unique<ActionManager>();
@@ -212,6 +222,21 @@ absl::Status Database::UpdateSchema(
 
 const Schema* Database::GetLatestSchema() const {
   return versioned_catalog_->GetLatestSchema();
+}
+
+absl::Status Database::EnablePersistence(
+    const std::string& database_uri,
+    std::shared_ptr<WalWriter> wal_writer) {
+  auto* in_memory = dynamic_cast<InMemoryStorage*>(storage_.get());
+  if (in_memory == nullptr) {
+    return absl::FailedPreconditionError(
+        "Cannot enable persistence: storage is not InMemoryStorage");
+  }
+  std::unique_ptr<InMemoryStorage> owned(
+      static_cast<InMemoryStorage*>(storage_.release()));
+  storage_ = PersistentStorage::Wrap(
+      database_uri, std::move(owned), std::move(wal_writer));
+  return absl::OkStatus();
 }
 
 }  // namespace backend

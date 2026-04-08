@@ -28,6 +28,7 @@
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
 #include "backend/schema/updater/schema_updater.h"
+#include "backend/storage/wal_writer.h"
 #include "common/clock.h"
 #include "frontend/entities/database.h"
 #include "absl/status/status.h"
@@ -49,7 +50,8 @@ class DatabaseManager {
   // Creates a database with a schema initialized from `create_statements`.
   absl::StatusOr<std::shared_ptr<Database>> CreateDatabase(
       const std::string& database_uri,
-      const backend::SchemaChangeOperation& schema_change_operation)
+      const backend::SchemaChangeOperation& schema_change_operation,
+      std::shared_ptr<backend::WalWriter> wal_writer = nullptr)
       ABSL_LOCKS_EXCLUDED(mu_);
 
   // Returns a database with the given URI.

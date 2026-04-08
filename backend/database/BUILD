@@ -46,6 +46,8 @@ cc_library(
         "//backend/schema/updater:scoped_schema_change_lock",
         "//backend/storage",
         "//backend/storage:in_memory_storage",
+        "//backend/storage:persistent_storage",
+        "//backend/storage:wal_writer",
         "//backend/transaction:read_only_transaction",
         "//backend/transaction:read_write_transaction",
         "//common:clock",

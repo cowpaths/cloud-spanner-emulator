@@ -52,6 +52,13 @@ class PersistentStorage : public Storage {
   static absl::StatusOr<std::unique_ptr<PersistentStorage>> Create(
       const std::string& database_uri, std::shared_ptr<WalWriter> wal_writer);
 
+  // Wrap an existing InMemoryStorage with WAL logging.
+  // Used after snapshot/WAL replay to enable persistence on restored databases.
+  static std::unique_ptr<PersistentStorage> Wrap(
+      const std::string& database_uri,
+      std::unique_ptr<InMemoryStorage> inner,
+      std::shared_ptr<WalWriter> wal_writer);
+
   // Access the underlying in-memory storage (for snapshot serialization).
   InMemoryStorage* inner() { return inner_.get(); }
 

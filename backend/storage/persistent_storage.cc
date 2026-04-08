@@ -53,6 +53,15 @@ absl::StatusOr<std::unique_ptr<PersistentStorage>> PersistentStorage::Create(
                             std::move(wal_writer)));
 }
 
+std::unique_ptr<PersistentStorage> PersistentStorage::Wrap(
+    const std::string& database_uri,
+    std::unique_ptr<InMemoryStorage> inner,
+    std::shared_ptr<WalWriter> wal_writer) {
+  return std::unique_ptr<PersistentStorage>(
+      new PersistentStorage(database_uri, std::move(inner),
+                            std::move(wal_writer)));
+}
+
 absl::Status PersistentStorage::Lookup(
     absl::Time timestamp, const TableID& table_id, const Key& key,
     const std::vector<ColumnID>& column_ids,

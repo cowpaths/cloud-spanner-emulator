@@ -124,6 +124,7 @@ cc_library(
         ":handler",
         ":persistence_manager",
         ":request_context",
+        "//backend/storage:persistent_storage",
         "//common:constants",
         "//common:errors",
         "//common:limits",
@@ -150,6 +151,7 @@ cc_library(
         "environment.h",
     ],
     deps = [
+        "//backend/storage:wal_writer",
         "//common:clock",
         "//frontend/collections:database_manager",
         "//frontend/collections:instance_manager",
