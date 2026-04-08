@@ -16,7 +16,8 @@
 
 #include "frontend/server/persistence_manager.h"
 
-#include <cstdlib>
+#include <ftw.h>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -153,8 +154,11 @@ class PersistenceManagerTest : public testing::Test {
 
   void TearDown() override {
     // Clean up test directory recursively.
-    std::string cmd = "rm -rf " + test_dir_;
-    system(cmd.c_str());
+    nftw(test_dir_.c_str(),
+         [](const char* path, const struct stat*, int, struct FTW*) {
+           return remove(path);
+         },
+         64, FTW_DEPTH | FTW_PHYS);
   }
 
   std::string test_dir_;
