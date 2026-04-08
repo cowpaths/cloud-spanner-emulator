@@ -236,6 +236,13 @@ jobs:
       - package-and-upload:
           platform: linux
 
+  ci-complete:
+    docker:
+      - image: cimg/base:stable
+    resource_class: small
+    steps:
+      - run: echo "All CI checks passed."
+
   release-macos:
     executor: macos
     steps:
@@ -277,6 +284,11 @@ workflows:
       - test-macos-storage:
           requires:
             - build-macos
+      - ci-complete:
+          requires:
+            - test-linux
+            - test-macos
+            - test-macos-storage
 
   release:
     jobs:
