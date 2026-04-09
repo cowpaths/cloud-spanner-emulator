@@ -40,6 +40,7 @@ cc_binary(
         "//frontend/server",
         "@com_github_grpc_grpc//:grpc++",
         "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/flags:usage",
         "@com_google_absl//absl/strings",
         "@com_google_zetasql//zetasql/base",
     ],

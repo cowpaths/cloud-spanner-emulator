@@ -23,12 +23,15 @@
 #include "google/protobuf/timestamp.pb.h"
 #include "google/spanner/admin/database/v1/common.pb.h"
 #include "google/spanner/admin/database/v1/spanner_database_admin.pb.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/time.h"
 #include "backend/database/database.h"
 #include "backend/schema/ddl/operations.pb.h"
+#include "backend/storage/persistence.pb.h"
+#include "backend/storage/wal_writer.h"
 #include "backend/schema/parser/ddl_parser.h"
 #include "backend/schema/printer/print_ddl.h"
 #include "backend/schema/updater/schema_updater.h"
@@ -143,7 +146,22 @@ absl::Status CreateDatabase(RequestContext* ctx,
                                          .proto_descriptor_bytes =
                                              request->proto_descriptors(),
                                          .database_dialect = dialect,
-                                     }));
+                                     },
+                       ctx->env()->wal_writer()));
+
+  // Log the database creation to the WAL.
+  if (ctx->env()->wal_writer()) {
+    backend::WalRecord wal_record;
+    auto* meta = wal_record.mutable_metadata_change();
+    auto* cd = meta->mutable_create_database();
+    cd->set_database_uri(database_uri);
+    cd->set_database_id(database_name);
+    cd->set_dialect(static_cast<int32_t>(dialect));
+    for (const auto& stmt : create_statements) {
+      cd->add_ddl_statements(stmt);
+    }
+    ZETASQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
+  }
 
   // Create an operation tracking the database creation.
   ZETASQL_ASSIGN_OR_RETURN(std::shared_ptr<Operation> operation,
@@ -215,6 +233,18 @@ absl::Status UpdateDatabaseDdl(
           .database_dialect = backend_database->dialect()},
       &num_succesful_statements, &commit_timestamp, &backfill_status));
 
+  // Log the successfully applied DDL statements to the WAL.
+  if (ctx->env()->wal_writer() && num_succesful_statements > 0) {
+    backend::WalRecord wal_record;
+    auto* sc = wal_record.mutable_schema_change();
+    sc->set_database_uri(request->database());
+    sc->set_dialect(static_cast<int32_t>(backend_database->dialect()));
+    for (int i = 0; i < num_succesful_statements; ++i) {
+      sc->add_ddl_statements(statements[i]);
+    }
+    ZETASQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
+  }
+
   // Populate ResultSet metadata.
   // For simplicity in emulator, we have implemented the schema updates in such
   // a way that all the statements in update ddl execute at the same commit
@@ -274,7 +304,22 @@ absl::Status DropDatabase(RequestContext* ctx,
   }
 
   // Clean up the database.
-  return ctx->env()->database_manager()->DeleteDatabase(request->database());
+  ZETASQL_RETURN_IF_ERROR(
+      ctx->env()->database_manager()->DeleteDatabase(request->database()));
+
+  // Log the database deletion to the WAL.
+  if (ctx->env()->wal_writer()) {
+    backend::WalRecord wal_record;
+    auto* meta = wal_record.mutable_metadata_change();
+    meta->set_delete_database_uri(request->database());
+    auto wal_status = ctx->env()->wal_writer()->Append(wal_record);
+    if (!wal_status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to log database deletion to WAL: "
+                      << wal_status;
+    }
+  }
+
+  return absl::OkStatus();
 }
 REGISTER_GRPC_HANDLER(DatabaseAdmin, DropDatabase);
 

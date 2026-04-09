@@ -100,6 +100,17 @@ absl::StatusOr<std::shared_ptr<Instance>> InstanceManager::CreateInstance(
   return inserted.first->second;
 }
 
+std::vector<std::shared_ptr<Instance>> InstanceManager::ListAllInstances()
+    const {
+  absl::MutexLock lock(&mu_);
+  std::vector<std::shared_ptr<Instance>> instances;
+  instances.reserve(instances_.size());
+  for (const auto& [uri, instance] : instances_) {
+    instances.push_back(instance);
+  }
+  return instances;
+}
+
 void InstanceManager::DeleteInstance(const std::string& instance_uri) {
   absl::MutexLock lock(&mu_);
   instances_.erase(instance_uri);

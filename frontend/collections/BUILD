@@ -30,6 +30,7 @@ cc_library(
     deps = [
         "//backend/database",
         "//backend/schema/updater:schema_updater",
+        "//backend/storage:wal_writer",
         "//common:clock",
         "//common:errors",
         "//common:limits",

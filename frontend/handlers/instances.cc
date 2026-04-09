@@ -19,6 +19,9 @@
 #include "google/longrunning/operations.pb.h"
 #include "google/protobuf/empty.pb.h"
 #include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
+#include "absl/log/log.h"
+#include "backend/storage/persistence.pb.h"
+#include "backend/storage/wal_writer.h"
 #include "common/errors.h"
 #include "common/limits.h"
 #include "frontend/collections/operation_manager.h"
@@ -163,6 +166,18 @@ absl::Status CreateInstance(RequestContext* ctx,
                    ctx->env()->instance_manager()->CreateInstance(
                        instance_uri, request->instance()));
 
+  // Log the instance creation to the WAL.
+  if (ctx->env()->wal_writer()) {
+    backend::WalRecord wal_record;
+    auto* meta = wal_record.mutable_metadata_change();
+    auto* ci = meta->mutable_create_instance();
+    ci->set_instance_uri(instance_uri);
+    instance_api::Instance inst_proto;
+    instance->ToProto(&inst_proto);
+    ci->set_instance_proto(inst_proto.SerializeAsString());
+    ZETASQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
+  }
+
   // Create an operation tracking this instance creation.
   ZETASQL_ASSIGN_OR_RETURN(std::shared_ptr<Operation> operation,
                    ctx->env()->operation_manager()->CreateOperation(
@@ -235,6 +250,19 @@ absl::Status DeleteInstance(RequestContext* ctx,
 
   // Clean up the instance.
   ctx->env()->instance_manager()->DeleteInstance(request->name());
+
+  // Log the instance deletion to the WAL.
+  if (ctx->env()->wal_writer()) {
+    backend::WalRecord wal_record;
+    auto* meta = wal_record.mutable_metadata_change();
+    meta->set_delete_instance_uri(request->name());
+    auto wal_status = ctx->env()->wal_writer()->Append(wal_record);
+    if (!wal_status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to log instance deletion to WAL: "
+                      << wal_status;
+    }
+  }
+
   return absl::OkStatus();
 }
 REGISTER_GRPC_HANDLER(InstanceAdmin, DeleteInstance);

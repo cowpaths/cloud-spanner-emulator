@@ -84,6 +84,34 @@ cc_test(
 )
 
 cc_library(
+    name = "persistence_manager",
+    srcs = ["persistence_manager.cc"],
+    hdrs = ["persistence_manager.h"],
+    deps = [
+        ":environment",
+        "//backend/datamodel:key_range",
+        "//backend/schema/updater:schema_updater",
+        "//backend/storage:persistence_cc_proto",
+        "//backend/storage:snapshot_loader",
+        "//backend/storage:snapshot_writer",
+        "//backend/storage:value_serializer",
+        "//backend/storage:wal_writer",
+        "//frontend/entities:database",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@com_google_googleapis//google/spanner/admin/database/v1:database_cc_proto",
+        "@com_google_googleapis//google/spanner/admin/instance/v1:instance_cc_proto",
+        "@com_google_zetasql//zetasql/base",
+        "@com_google_zetasql//zetasql/public:type",
+        "@com_google_zetasql//zetasql/public:value",
+    ],
+)
+
+cc_library(
     name = "server",
     srcs = [
         "server.cc",
@@ -94,7 +122,9 @@ cc_library(
     deps = [
         ":environment",
         ":handler",
+        ":persistence_manager",
         ":request_context",
+        "//backend/storage:persistent_storage",
         "//common:constants",
         "//common:errors",
         "//common:limits",
@@ -102,6 +132,7 @@ cc_library(
         "//frontend/handlers",
         "@com_github_grpc_grpc//:grpc++",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/time",
         "@com_google_googleapis//google/iam/v1:iam_policy_cc_proto",
         "@com_google_googleapis//google/iam/v1:policy_cc_proto",
         "@com_google_googleapis//google/rpc:error_details_cc_proto",
@@ -114,12 +145,47 @@ cc_library(
     ],
 )
 
+cc_test(
+    name = "persistence_manager_test",
+    srcs = ["persistence_manager_test.cc"],
+    deps = [
+        ":environment",
+        ":persistence_manager",
+        "//backend/access:read",
+        "//backend/access:write",
+        "//backend/database:database",
+        "//backend/datamodel:key_set",
+        "//backend/schema/catalog:schema",
+        "//backend/schema/updater:schema_updater",
+        "//backend/storage:persistence_cc_proto",
+        "//backend/storage:snapshot_loader",
+        "//backend/storage:snapshot_writer",
+        "//backend/storage:wal_writer",
+        "//backend/transaction:read_only_transaction",
+        "//backend/transaction:read_write_transaction",
+        "//frontend/collections:database_manager",
+        "//frontend/collections:instance_manager",
+        "//frontend/entities:database",
+        "//tests/common:proto_matchers",
+        "@com_github_google_benchmark//:benchmark",
+        "@com_github_grpc_grpc//:grpc++",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/time",
+        "@com_google_googleapis//google/spanner/admin/database/v1:database_cc_proto",
+        "@com_google_googleapis//google/spanner/admin/instance/v1:instance_cc_proto",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_zetasql//zetasql/base/testing:status_matchers",
+        "@com_google_zetasql//zetasql/public:value",
+    ],
+)
+
 cc_library(
     name = "environment",
     hdrs = [
         "environment.h",
     ],
     deps = [
+        "//backend/storage:wal_writer",
         "//common:clock",
         "//frontend/collections:database_manager",
         "//frontend/collections:instance_manager",

@@ -38,6 +38,7 @@
 #include "backend/schema/catalog/versioned_catalog.h"
 #include "backend/schema/updater/schema_updater.h"
 #include "backend/storage/storage.h"
+#include "backend/storage/wal_writer.h"
 #include "backend/transaction/options.h"
 #include "backend/transaction/read_only_transaction.h"
 #include "backend/transaction/read_write_transaction.h"
@@ -62,7 +63,9 @@ class Database {
   // failed to create the database.
   static absl::StatusOr<std::unique_ptr<Database>> Create(
       Clock* clock, std::string_view database_id,
-      const SchemaChangeOperation& schema_change_operation);
+      const SchemaChangeOperation& schema_change_operation,
+      std::shared_ptr<WalWriter> wal_writer = nullptr,
+      const std::string& database_uri = "");
 
   // Creates a read only transaction attached to this database.
   absl::StatusOr<std::unique_ptr<ReadOnlyTransaction>>
@@ -121,6 +124,27 @@ class Database {
   }
 
   PgOidAssigner* get_pg_oid_assigner() { return pg_oid_assigner_.get(); }
+
+  // Upgrades storage from InMemoryStorage to PersistentStorage.
+  // Called after snapshot/WAL replay to enable WAL logging for restored
+  // databases.
+  absl::Status EnablePersistence(const std::string& database_uri,
+                                 std::shared_ptr<WalWriter> wal_writer);
+
+  // Accessors for persistence support.
+  Storage* storage() { return storage_.get(); }
+  const std::string& database_id() const { return database_id_; }
+  zetasql::TypeFactory* type_factory() { return type_factory_.get(); }
+
+  // ID generator accessors for persistence save/restore.
+  TransactionIDGenerator& transaction_id_generator() {
+    return transaction_id_generator_;
+  }
+  TableIDGenerator& table_id_generator() { return table_id_generator_; }
+  ColumnIDGenerator& column_id_generator() { return column_id_generator_; }
+  ChangeStreamIDGenerator& change_stream_id_generator() {
+    return change_stream_id_generator_;
+  }
 
  private:
   Database();

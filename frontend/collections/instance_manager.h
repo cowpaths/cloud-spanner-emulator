@@ -49,6 +49,10 @@ class InstanceManager {
   absl::StatusOr<std::vector<std::shared_ptr<Instance>>> ListInstances(
       const std::string& project_uri) const ABSL_LOCKS_EXCLUDED(mu_);
 
+  // Lists all instances in the emulator (no project filter).
+  std::vector<std::shared_ptr<Instance>> ListAllInstances() const
+      ABSL_LOCKS_EXCLUDED(mu_);
+
  private:
   // Mutex to guard state below.
   mutable absl::Mutex mu_;

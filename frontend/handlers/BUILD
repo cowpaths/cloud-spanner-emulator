@@ -29,6 +29,8 @@ cc_library(
     deps = [
         "//backend/database",
         "//backend/schema/ddl:operations_cc_proto",
+        "//backend/storage:persistence_cc_proto",
+        "//backend/storage:wal_writer",
         "//backend/schema/parser:ddl_parser",
         "//backend/schema/printer:print_ddl",
         "//backend/schema/updater:schema_updater",
@@ -38,6 +40,7 @@ cc_library(
         "//frontend/converters:time",
         "//frontend/entities:database",
         "//frontend/server:handler",
+        "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -83,6 +86,8 @@ cc_library(
     name = "instances",
     srcs = ["instances.cc"],
     deps = [
+        "//backend/storage:persistence_cc_proto",
+        "//backend/storage:wal_writer",
         "//common:errors",
         "//common:limits",
         "//frontend/collections:operation_manager",
@@ -92,6 +97,7 @@ cc_library(
         "//frontend/entities:instance",
         "//frontend/entities:operation",
         "//frontend/server:handler",
+        "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_googleapis//google/longrunning:longrunning_cc_grpc",
         "@com_google_googleapis//google/spanner/admin/instance/v1:instance_cc_grpc",

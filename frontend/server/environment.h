@@ -19,6 +19,7 @@
 
 #include <memory>
 
+#include "backend/storage/wal_writer.h"
 #include "common/clock.h"
 #include "frontend/collections/database_manager.h"
 #include "frontend/collections/instance_manager.h"
@@ -51,6 +52,10 @@ class ServerEnv {
     return mux_txn_manager_.get();
   }
 
+  // WAL writer for persistence. Returns nullptr when persistence is disabled.
+  std::shared_ptr<backend::WalWriter> wal_writer() const { return wal_writer_; }
+  void set_wal_writer(std::shared_ptr<backend::WalWriter> w) { wal_writer_ = std::move(w); }
+
  private:
   std::unique_ptr<Clock> clock_;
   std::unique_ptr<DatabaseManager> database_manager_;
@@ -58,6 +63,7 @@ class ServerEnv {
   std::unique_ptr<OperationManager> operation_manager_;
   std::unique_ptr<SessionManager> session_manager_;
   std::unique_ptr<MultiplexedSessionTransactionManager> mux_txn_manager_;
+  std::shared_ptr<backend::WalWriter> wal_writer_;
 };
 
 }  // namespace frontend

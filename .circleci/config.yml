@@ -8,7 +8,7 @@ executors:
   macos:
     macos:
       xcode: "26.4.0"
-    resource_class: m4pro.medium
+    resource_class: m4pro.large
 
 commands:
   install-bazelisk:
@@ -35,6 +35,19 @@ commands:
             - bazel-v1-<< parameters.platform >>-{{ checksum "WORKSPACE" }}-{{ checksum ".bazelversion" }}
             - bazel-v1-<< parameters.platform >>-{{ checksum "WORKSPACE" }}
             - bazel-v1-<< parameters.platform >>-
+      - run:
+          name: Prune large files from Bazel disk cache
+          command: |
+            CACHE_DIR=/tmp/bazel-disk-cache
+            if [[ -d "$CACHE_DIR" ]]; then
+              echo "Disk cache before prune: $(du -sh "$CACHE_DIR" | cut -f1)"
+              # Delete cached files over 100MB. These are linked test binaries
+              # that dominate cache size (~38GB) but are fast to re-link.
+              # Small compilation outputs (.o/.a ~1.7GB) are expensive to
+              # rebuild and are preserved.
+              find "$CACHE_DIR" -type f -size +100M -delete
+              echo "Disk cache after prune: $(du -sh "$CACHE_DIR" | cut -f1)"
+            fi
 
   save-bazel-cache:
     parameters:
@@ -103,6 +116,50 @@ commands:
             gsutil cp "${TARBALL}" "${GCS_PATH}"
             echo "Uploaded: ${GCS_PATH}"
 
+  free-disk-space:
+    steps:
+      - run:
+          name: Free disk space
+          command: |
+            echo "Disk usage before cleanup:"
+            df -h /
+
+            # Purge APFS snapshots and purgeable space (~30-70 GB)
+            # This reclaims the gap between "used + avail" and total disk size.
+            sudo tmutil deletelocalsnapshots / 2>/dev/null || true
+            sudo tmutil thinlocalsnapshots / 999999999999 2>/dev/null || true
+
+            # Remove simulators and device platforms (~10+ GB)
+            sudo rm -rf /Library/Developer/CoreSimulator
+            sudo rm -rf /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform
+            sudo rm -rf /Applications/Xcode.app/Contents/Developer/Platforms/WatchOS.platform
+            sudo rm -rf /Applications/Xcode.app/Contents/Developer/Platforms/AppleTVOS.platform
+            sudo rm -rf /Applications/Xcode.app/Contents/Developer/Platforms/XROS.platform
+
+            # Remove Xcode caches and device support files (~5-40 GB)
+            rm -rf ~/Library/Developer/Xcode/DerivedData
+            rm -rf ~/Library/Developer/Xcode/iOS\ DeviceSupport
+            rm -rf ~/Library/Developer/Xcode/WatchOS\ DeviceSupport
+            rm -rf ~/Library/Developer/Xcode/tvOS\ DeviceSupport
+            rm -rf ~/Library/Developer/Xcode/Archives
+
+            # Remove Swift/DocC toolchains and documentation we don't need
+            sudo rm -rf /Library/Developer/Toolchains
+            rm -rf ~/Library/Developer/Shared/Documentation
+
+            echo "Disk usage after cleanup:"
+            df -h /
+
+  clean-homebrew-cache:
+    steps:
+      - run:
+          name: Clean Homebrew cache
+          command: |
+            brew cleanup --prune=all 2>/dev/null || true
+            rm -rf ~/Library/Caches/Homebrew
+            echo "Disk usage after Homebrew cleanup:"
+            df -h /
+
   collect-test-results:
     steps:
       - run:
@@ -165,8 +222,10 @@ jobs:
     executor: macos
     steps:
       - checkout
+      - free-disk-space
       - install-bazelisk
       - install-gcloud
+      - clean-homebrew-cache
       - restore-bazel-cache:
           platform: macos
       - run:
@@ -183,8 +242,10 @@ jobs:
     executor: macos
     steps:
       - checkout
+      - free-disk-space
       - install-bazelisk
       - install-gcloud
+      - clean-homebrew-cache
       - restore-bazel-cache:
           platform: macos
       - run:
@@ -218,12 +279,21 @@ jobs:
       - package-and-upload:
           platform: linux
 
+  ci-complete:
+    docker:
+      - image: cimg/base:stable
+    resource_class: small
+    steps:
+      - run: echo "All CI checks passed."
+
   release-macos:
     executor: macos
     steps:
       - checkout
+      - free-disk-space
       - install-bazelisk
       - install-gcloud
+      - clean-homebrew-cache
       - authenticate-gcloud
       - restore-bazel-cache:
           platform: macos
@@ -256,6 +326,10 @@ workflows:
       - test-macos:
           requires:
             - build-macos
+      - ci-complete:
+          requires:
+            - test-linux
+            - test-macos
 
   release:
     jobs:

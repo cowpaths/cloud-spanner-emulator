@@ -1,0 +1,182 @@
+//
+// Copyright 2020 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package google.spanner.emulator.backend;
+
+// A serialized zetasql::Value along with its type information.
+message PersistedValue {
+  // Serialized zetasql::TypeProto.
+  bytes type_proto = 1;
+  // Serialized zetasql::ValueProto.
+  bytes value_proto = 2;
+}
+
+// A single column within a key.
+message PersistedKeyColumn {
+  PersistedValue value = 1;
+  bool is_descending = 2;
+  bool is_nulls_last = 3;
+}
+
+// A full primary key consisting of one or more columns.
+message PersistedKey {
+  repeated PersistedKeyColumn columns = 1;
+  bool is_infinity = 2;
+  bool is_prefix_limit = 3;
+}
+
+// A single cell value at a specific timestamp.
+message TimestampedValue {
+  int64 timestamp_micros = 1;
+  PersistedValue value = 2;
+}
+
+// All timestamped versions for one column in a row.
+message PersistedCell {
+  string column_id = 1;
+  repeated TimestampedValue versions = 2;
+}
+
+// A single row in a table.
+message PersistedRow {
+  PersistedKey key = 1;
+  repeated PersistedCell cells = 2;
+}
+
+// A single table with all its rows.
+message PersistedTable {
+  string table_id = 1;
+  repeated PersistedRow rows = 2;
+}
+
+// Record of a dropped table for garbage collection.
+message DroppedTable {
+  int64 timestamp_micros = 1;
+  string table_id = 2;
+}
+
+// Record of a dropped column for garbage collection.
+message DroppedColumn {
+  int64 timestamp_micros = 1;
+  string table_id = 2;
+  string column_id = 3;
+}
+
+// The complete in-memory storage state.
+message PersistedStorage {
+  repeated PersistedTable tables = 1;
+  int64 version_retention_period_micros = 2;
+  repeated DroppedTable dropped_tables = 3;
+  repeated DroppedColumn dropped_columns = 4;
+}
+
+// Full state of a single database.
+message PersistedDatabase {
+  string database_uri = 1;
+  string database_id = 2;
+  int32 dialect = 3;
+  repeated string ddl_statements = 4;
+  PersistedStorage storage = 5;
+  int64 next_table_id_seq = 6;
+  int64 next_column_id_seq = 7;
+  int64 next_transaction_id_seq = 8;
+  int64 next_change_stream_id_seq = 9;
+}
+
+// A persisted instance with its serialized admin proto.
+message PersistedInstance {
+  string instance_uri = 1;
+  // Serialized google.spanner.admin.instance.v1.Instance proto.
+  bytes instance_proto = 2;
+}
+
+// Top-level snapshot of the entire emulator state.
+message EmulatorSnapshot {
+  int64 snapshot_timestamp_micros = 1;
+  repeated PersistedInstance instances = 2;
+  repeated PersistedDatabase databases = 3;
+}
+
+// A write mutation in the WAL.
+message WalWrite {
+  int64 table_id_hash = 1;
+  string table_id = 2;
+  PersistedKey key = 3;
+  repeated string column_ids = 4;
+  repeated PersistedValue values = 5;
+}
+
+// A delete mutation in the WAL.
+message WalDelete {
+  string table_id = 1;
+  PersistedKey start_key = 2;
+  PersistedKey end_key = 3;
+}
+
+// A single mutation in the WAL (either a write or delete).
+message WalMutation {
+  oneof mutation {
+    WalWrite write = 1;
+    // Named delete_op to avoid C++ reserved word conflict.
+    WalDelete delete_op = 2;
+  }
+}
+
+// A WAL entry representing a committed transaction.
+message WalEntry {
+  int64 sequence_number = 1;
+  int64 commit_timestamp_micros = 2;
+  string database_uri = 3;
+  repeated WalMutation mutations = 4;
+}
+
+// A WAL entry representing a schema change.
+message WalSchemaChange {
+  int64 sequence_number = 1;
+  string database_uri = 2;
+  repeated string ddl_statements = 3;
+  int32 dialect = 4;
+}
+
+// A WAL entry for creating a new database.
+message WalCreateDatabase {
+  string database_uri = 1;
+  string database_id = 2;
+  int32 dialect = 3;
+  repeated string ddl_statements = 4;
+}
+
+// A WAL entry representing a metadata change (instance/database lifecycle).
+message WalMetadataChange {
+  oneof change {
+    PersistedInstance create_instance = 1;
+    string delete_instance_uri = 2;
+    WalCreateDatabase create_database = 3;
+    string delete_database_uri = 4;
+  }
+}
+
+// A single record in the WAL.
+message WalRecord {
+  int64 sequence_number = 1;
+  oneof record {
+    WalEntry entry = 2;
+    WalSchemaChange schema_change = 3;
+    WalMetadataChange metadata_change = 4;
+  }
+}

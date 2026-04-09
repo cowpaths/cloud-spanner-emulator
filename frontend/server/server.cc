@@ -34,6 +34,8 @@
 #include "google/spanner/v1/spanner.pb.h"
 #include "google/spanner/v1/transaction.pb.h"
 #include "absl/memory/memory.h"
+#include "absl/time/time.h"
+#include "backend/storage/persistent_storage.h"
 #include "common/constants.h"
 #include "common/errors.h"
 #include "common/limits.h"
@@ -317,6 +319,48 @@ std::unique_ptr<Server> Server::Create(const Server::Options& options) {
       .RegisterService(server->instance_admin_service_.get())
       .RegisterService(server->operations_service_.get());
 
+  // Initialize persistence if configured.
+  server->persistence_manager_ =
+      PersistenceManager::Create(options.data_dir);
+  if (server->persistence_manager_) {
+    auto status =
+        server->persistence_manager_->RestoreState(server->env());
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to restore persistent state: " << status;
+      return nullptr;
+    }
+    ABSL_LOG(INFO) << "Restored persistent state from: "
+                   << options.data_dir;
+
+    // Make WAL writer available to handlers via ServerEnv.
+    server->env()->set_wal_writer(
+        server->persistence_manager_->wal_writer());
+
+    // Upgrade all restored databases from InMemoryStorage to PersistentStorage
+    // so that new writes are WAL-logged.
+    auto all_instances =
+        server->env()->instance_manager()->ListAllInstances();
+    for (const auto& instance : all_instances) {
+      auto dbs_or = server->env()->database_manager()->ListDatabases(
+          instance->instance_uri());
+      if (!dbs_or.ok()) continue;
+      for (const auto& db : *dbs_or) {
+        auto persist_status = db->backend()->EnablePersistence(
+            db->database_uri(),
+            server->persistence_manager_->wal_writer());
+        if (!persist_status.ok()) {
+          ABSL_LOG(ERROR) << "Failed to enable persistence for "
+                          << db->database_uri() << ": " << persist_status;
+          return nullptr;
+        }
+      }
+    }
+
+    server->persistence_manager_->StartPeriodicSnapshots(
+        server->env(),
+        absl::Seconds(options.snapshot_interval_secs));
+  }
+
   // Actually start the server.
   server->grpc_server_ = builder.BuildAndStart();
   if (server->port_ < 0) {
@@ -329,7 +373,19 @@ std::unique_ptr<Server> Server::Create(const Server::Options& options) {
 
 void Server::WaitForShutdown() { grpc_server_->Wait(); }
 
-void Server::Shutdown() { grpc_server_->Shutdown(); }
+void Server::Shutdown() {
+  if (persistence_manager_) {
+    persistence_manager_->StopPeriodicSnapshots();
+    auto status = persistence_manager_->SaveState(env_.get());
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to save persistent state: " << status;
+    } else {
+      ABSL_LOG(INFO) << "Saved persistent state to: "
+                     << persistence_manager_->data_dir();
+    }
+  }
+  grpc_server_->Shutdown();
+}
 
 }  // namespace frontend
 }  // namespace emulator
