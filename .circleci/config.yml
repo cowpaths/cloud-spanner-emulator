@@ -5,6 +5,10 @@ executors:
     machine:
       image: ubuntu-2404:current
     resource_class: xlarge
+  linux-arm64:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: arm.xlarge
   macos:
     macos:
       xcode: "26.4.0"
@@ -19,7 +23,11 @@ commands:
             if [[ "$(uname)" == "Darwin" ]]; then
               brew install bazelisk
             else
-              sudo curl -fsSL https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 \
+              arch="amd64"
+              if [[ "$(uname -m)" == "aarch64" ]]; then
+                arch="arm64"
+              fi
+              sudo curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-${arch}" \
                 -o /usr/local/bin/bazel
               sudo chmod +x /usr/local/bin/bazel
             fi
@@ -99,7 +107,10 @@ commands:
               host_arch="arm64"
             else
               host_os="linux"
-              host_arch="amd64"
+              case "$(uname -m)" in
+                aarch64) host_arch="arm64" ;;
+                *)       host_arch="amd64" ;;
+              esac
             fi
             tarball="spanner-emulator-v${version}-${host_os}-${host_arch}.tgz"
 
@@ -218,6 +229,42 @@ jobs:
           no_output_timeout: 30m
       - collect-test-results
 
+  build-linux-arm64:
+    executor: linux-arm64
+    steps:
+      - checkout
+      - install-bazelisk
+      - install-gcloud
+      - restore-bazel-cache:
+          platform: linux-arm64
+      - run:
+          name: Build all targets
+          command: |
+            bazel build \
+              --disk_cache=/tmp/bazel-disk-cache \
+              -- ... -third_party/...
+          no_output_timeout: 30m
+      - save-bazel-cache:
+          platform: linux-arm64
+
+  test-linux-arm64:
+    executor: linux-arm64
+    steps:
+      - checkout
+      - install-bazelisk
+      - install-gcloud
+      - restore-bazel-cache:
+          platform: linux-arm64
+      - run:
+          name: Run all tests
+          command: |
+            bazel test \
+              --disk_cache=/tmp/bazel-disk-cache \
+              --test_output=errors \
+              -- ... -third_party/...
+          no_output_timeout: 30m
+      - collect-test-results
+
   build-macos:
     executor: macos
     steps:
@@ -286,6 +333,27 @@ jobs:
     steps:
       - run: echo "All CI checks passed."
 
+  release-linux-arm64:
+    executor: linux-arm64
+    steps:
+      - checkout
+      - install-bazelisk
+      - install-gcloud
+      - authenticate-gcloud
+      - restore-bazel-cache:
+          platform: linux-arm64
+      - run:
+          name: Build binaries
+          command: |
+            bazel build -c opt \
+              --disk_cache=/tmp/bazel-disk-cache \
+              //binaries:emulator_main //binaries:gateway_main
+          no_output_timeout: 30m
+      - save-bazel-cache:
+          platform: linux-arm64
+      - package-and-upload:
+          platform: linux-arm64
+
   release-macos:
     executor: macos
     steps:
@@ -319,6 +387,13 @@ workflows:
       - test-linux:
           requires:
             - build-linux
+      - build-linux-arm64:
+          filters:
+            tags:
+              ignore: /.*/
+      - test-linux-arm64:
+          requires:
+            - build-linux-arm64
       - build-macos:
           filters:
             tags:
@@ -329,6 +404,7 @@ workflows:
       - ci-complete:
           requires:
             - test-linux
+            - test-linux-arm64
             - test-macos
 
   release:
@@ -342,6 +418,18 @@ workflows:
       - test-linux:
           requires:
             - build-linux
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+-fs.*/
+      - build-linux-arm64:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+\.\d+\.\d+-fs.*/
+      - test-linux-arm64:
+          requires:
+            - build-linux-arm64
           filters:
             tags:
               only: /^v\d+\.\d+\.\d+-fs.*/
@@ -360,6 +448,12 @@ workflows:
       - release-linux:
           requires:
             - test-linux
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+-fs.*/
+      - release-linux-arm64:
+          requires:
+            - test-linux-arm64
           filters:
             tags:
               only: /^v\d+\.\d+\.\d+-fs.*/
