@@ -20,6 +20,10 @@ build --copt   -Wno-deprecated-declarations
 build --copt   -Wno-return-type
 build --copt   -Wno-unused-but-set-parameter
 # Automatically apply build:macos on macOS, build:linux on Linux, etc.
+# Statically link libstdc++ so binaries don't require a newer GLIBCXX
+# than the runtime container (Debian 12) provides.
+build:linux --linkopt=-static-libstdc++
+
 build --enable_platform_specific_config
 
 # Clang 17+ warns on ZetaSQL code; GCC doesn't recognize this flag.
