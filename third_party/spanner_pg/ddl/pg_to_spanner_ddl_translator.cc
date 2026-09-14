@@ -33,6 +33,7 @@
 
 #include <string.h>
 
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -48,6 +49,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"

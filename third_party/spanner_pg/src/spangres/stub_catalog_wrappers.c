@@ -198,3 +198,14 @@ void GetProcsCandidates(const char* schema_name, const char* func_name,
 bool IsInNamespace(const FormData_pg_proc* procform, Oid namespace_oid) {
   abort();
 }
+
+char** FindCandidateSchemasForUnqualifiedFunctionC(const char* func_name,
+                                                   int* num_schemas) {
+  *num_schemas = 0;
+  return NULL;
+}
+
+bool IsSearchPathFeatureEnabledC() {
+  return false;
+}
+

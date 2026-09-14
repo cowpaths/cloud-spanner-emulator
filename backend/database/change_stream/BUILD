@@ -52,6 +52,7 @@ cc_library(
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "@com_google_googlesql//googlesql/base:ret_check",
+        "@com_google_googlesql//googlesql/base:status",
         "@com_google_googlesql//googlesql/public:value",
     ],
 )
@@ -79,6 +80,7 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/time",
+        "@com_google_googlesql//googlesql/base:status",
         "@com_google_googlesql//googlesql/base/testing:status_matchers",
         "@com_google_googlesql//googlesql/public:value",
         "@com_google_googletest//:gtest_main",

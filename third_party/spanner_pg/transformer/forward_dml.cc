@@ -32,7 +32,10 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <numeric>
+#include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -48,19 +51,26 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_map.h"
-#include "absl/flags/flag.h"
-#include "absl/meta/type_traits.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "third_party/spanner_pg/postgres_includes/all.h"
+#include "absl/strings/string_view.h"
+#include "third_party/spanner_pg/catalog/spangres_type.h"
 #include "third_party/spanner_pg/shims/error_shim.h"
 #include "third_party/spanner_pg/transformer/expr_transformer_helper.h"
 #include "third_party/spanner_pg/transformer/forward_transformer.h"
+#include "third_party/spanner_pg/transformer/transformer_helper.h"
 #include "third_party/spanner_pg/util/nodetag_to_string.h"
 #include "third_party/spanner_pg/util/pg_list_iterators.h"
 #include "third_party/spanner_pg/util/postgres.h"
+#include "third_party/spanner_pg/src/include/access/sysattr.h"
+#include "third_party/spanner_pg/src/include/c.h"
+#include "third_party/spanner_pg/src/include/nodes/nodes.h"
+#include "third_party/spanner_pg/src/include/nodes/parsenodes.h"
+#include "third_party/spanner_pg/src/include/nodes/pg_list.h"
+#include "third_party/spanner_pg/src/include/nodes/primnodes.h"
+#include "third_party/spanner_pg/src/include/parser/parsetree.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_macros.h"
 
@@ -279,6 +289,37 @@ absl::Status ForwardTransformer::CheckForUnsupportedOnConflictClause(
   return absl::OkStatus();
 }
 
+absl::StatusOr<ForwardTransformer::SubscriptUpdates>
+ForwardTransformer::CollectSubscriptUpdates(
+    const std::vector<TargetEntry*>& entries,
+    const VarIndexScope& update_value_scope, const std::string& clause_name) {
+  SubscriptUpdates updates;
+  bool has_full_update = false;
+  for (TargetEntry* entry : entries) {
+    if (nodeTag(entry->expr) == T_SubscriptingRef) {
+      const SubscriptingRef* ref =
+          internal::PostgresCastNode(SubscriptingRef, entry->expr);
+      GOOGLESQL_RET_CHECK_NE(ref->refassgnexpr, nullptr);
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          std::unique_ptr<googlesql::ResolvedExpr> resolved_expr,
+          BuildGsqlResolvedScalarExpr(*ref->refassgnexpr, &update_value_scope,
+                                      clause_name.c_str()));
+      updates.emplace_back(ref, std::move(resolved_expr));
+    } else {
+      // Not a subscript update so it must be a full column update.
+      has_full_update = true;
+    }
+  }
+
+  // We do not allow full column updates in combination with subscript update.
+  if (has_full_update && !updates.empty()) {
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "multiple assignments to same column \"%s\"", entries[0]->resname));
+  }
+
+  return updates;
+}
+
 absl::Status ForwardTransformer::PopulateUpdateSetItemListFromUpdateSetClause(
     const googlesql::Table& table, Index table_rtindex,
     const List* update_set_clause, const VarIndexScope& update_column_scope,
@@ -287,44 +328,92 @@ absl::Status ForwardTransformer::PopulateUpdateSetItemListFromUpdateSetClause(
         update_item_list) {
   absl::flat_hash_map<int, const googlesql::Column*> unwritable_table_columns =
       GetUnwritableColumns(&table);
-  absl::flat_hash_set<int> updated_resnos;
+
+  // Group updates by resno to handle multiple assignments and subscripted
+  // assignments.
+  absl::flat_hash_map<int, std::vector<TargetEntry*>> grouped_updates;
+  std::vector<int> target_resnos;
   for (TargetEntry* entry : StructList<TargetEntry*>(update_set_clause)) {
-    // Check for cases where the same column is set multiple times.
-    // Note that this (and vanilla PG) will return an error even if the set
-    // value is the same.
-    if (updated_resnos.contains(entry->resno)) {
-      return absl::InvalidArgumentError(absl::StrFormat(
-          "multiple assignments to same column \"%s\"", entry->resname));
+    if (grouped_updates.find(entry->resno) == grouped_updates.end()) {
+      target_resnos.push_back(entry->resno);
     }
+    grouped_updates[entry->resno].push_back(entry);
+  }
+
+  for (int resno : target_resnos) {
+    const auto& entries = grouped_updates[resno];
     // Adjust from 1-based to 0-based indexing.
-    int column_index = entry->resno - 1;
+    int column_index = resno - 1;
     auto it = unwritable_table_columns.find(column_index);
     if (it != unwritable_table_columns.end()) {
       return absl::InvalidArgumentError(
           absl::StrFormat("Cannot UPDATE value on non-writable column \"%s\"",
                           it->second->Name()));
     }
-    updated_resnos.insert(entry->resno);
 
-    GOOGLESQL_ASSIGN_OR_RETURN(googlesql::ResolvedColumn update_column,
-                     GetResolvedColumn(update_column_scope, table_rtindex,
-                                       entry->resno, /*var_levels_up=*/0));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        googlesql::ResolvedColumn update_column,
+        GetResolvedColumn(update_column_scope, table_rtindex, resno,
+                          /*var_levels_up=*/0));
     GOOGLESQL_ASSIGN_OR_RETURN(
         std::unique_ptr<googlesql::ResolvedColumnRef> column_ref,
         BuildGsqlResolvedColumnRef(update_column,
                                    /*is_correlated=*/false,
                                    googlesql::ResolvedStatement::WRITE));
 
-    GOOGLESQL_ASSIGN_OR_RETURN(
-        std::unique_ptr<const googlesql::ResolvedDMLValue> dml_value,
-        BuildGsqlResolvedDMLValue(*entry->expr, &update_value_scope,
-                                  clause_name.c_str()));
-
     std::unique_ptr<googlesql::ResolvedUpdateItem> update_item =
         googlesql::MakeResolvedUpdateItem();
     update_item->set_target(std::move(column_ref));
-    update_item->set_set_value(std::move(dml_value));
-    update_item_list.push_back(std::move(update_item));
+
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        SubscriptUpdates subscript_updates,
+        CollectSubscriptUpdates(entries, update_value_scope, clause_name));
+
+    if (!subscript_updates.empty()) {
+      // Note, while GoogleSQL can natively model subscript updates in the
+      // resolved AST using ResolvedUpdateItemElements, we can not use this
+      // here. Our JSONB extended type is not one of the types the GoogleSQL
+      // validator recognizes as supported for subscript updates, so we would
+      // end up with an analyzer error. Instead, we directly construct the calls
+      // to our internal SPAN_JSONB_SET function here rather than having
+      // gsql_algebrizer do so for us like we do for the GoogleSQL dialect.
+      if (update_item->target()->type() ==
+          spangres::types::PgJsonbMapping()->mapped_type()) {
+        ExprTransformerInfo transformer_info =
+            ExprTransformerInfo::ForScalarFunctions(&update_value_scope,
+                                                    clause_name.c_str());
+        // Same as target_ref above, but with READ access.
+        GOOGLESQL_ASSIGN_OR_RETURN(
+            std::unique_ptr<googlesql::ResolvedColumnRef> original_jsonb,
+            BuildGsqlResolvedColumnRef(update_column, /*is_correlated=*/false,
+                                       googlesql::ResolvedStatement::READ));
+        GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<googlesql::ResolvedFunctionCall> call,
+                         BuildGsqlSpanJsonbSetFunctionCall(
+                             std::move(original_jsonb),
+                             std::move(subscript_updates), &transformer_info));
+        update_item->set_set_value(
+            googlesql::MakeResolvedDMLValue(std::move(call)));
+        update_item_list.push_back(std::move(update_item));
+      } else {
+        return absl::InvalidArgumentError(
+            "Assignment to array elements is not supported");
+      }
+    } else {
+      // For non-subscript updates do not allow multiple assignments to the same
+      // column.
+      if (entries.size() > 1) {
+        return absl::InvalidArgumentError(absl::StrFormat(
+            "multiple assignments to same column \"%s\"", entries[0]->resname));
+      }
+      // Regular single non-subscript update.
+      TargetEntry* entry = entries[0];
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          std::unique_ptr<const googlesql::ResolvedDMLValue> dml_value,
+          BuildGsqlResolvedDMLValue(*entry->expr, &update_value_scope,
+                                    clause_name.c_str()));
+      update_item->set_set_value(std::move(dml_value));
+      update_item_list.push_back(std::move(update_item));
+    }
   }
   return absl::OkStatus();
 }

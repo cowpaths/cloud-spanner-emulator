@@ -706,6 +706,42 @@ TEST_F(SchemaTest, IndexBuilder) {
                          .build();
   EXPECT_EQ(invalid_idx->Validate(&context_),
             error::InvalidSchemaName("Index", index_name));
+
+  // An index cannot use both NULL_FILTERED and null-filtered columns.
+  ib = Index::Builder();
+  auto i6 = ib.set_name("I6")
+                .set_indexed_table(tb.get())
+                .set_index_data_table(idt.get())
+                .add_key_column(k2_dt.get())
+                .set_null_filtered(true)
+                .add_null_filtered_column(c2_dt.get())
+                .build();
+  EXPECT_EQ(i6->Validate(&context_),
+            error::IndexCannotUseBothNullFiltered("I6"));
+
+  // Null filtered column in base table but not in index data table.
+  ib = Index::Builder();
+  auto i7 = ib.set_name("I7")
+                .set_indexed_table(tb.get())
+                .set_index_data_table(idt.get())
+                .add_key_column(k2_dt.get())
+                .add_null_filtered_column(c3.get())
+                .build();
+  EXPECT_EQ(i7->Validate(&context_),
+            error::CannotNullFilterColumnNotInIndex("c3", "I7"));
+
+  // Null filtered column does not exist in base table.
+  auto c_nonexistent = column_builder("c_nonexistent", nullptr).build();
+  ib = Index::Builder();
+  auto i8 = ib.set_name("I8")
+                .set_indexed_table(tb.get())
+                .set_index_data_table(idt.get())
+                .add_key_column(k2_dt.get())
+                .add_null_filtered_column(c_nonexistent.get())
+                .build();
+  EXPECT_EQ(
+      i8->Validate(&context_),
+      error::IndexRefsNonexistentColumnNullFiltered("I8", "c_nonexistent"));
 }
 
 TEST_F(SchemaTest, PrintDDLStatementsTestSearchIndexWithOptions) {
@@ -2349,7 +2385,7 @@ TEST_F(SchemaTest, FullDebugStringAndPrintIndexFilter) {
                 c1 STRING(MAX),
                 c2 STRING(MAX),
               ) PRIMARY KEY(k1))",
-              R"(CREATE INDEX IdxPartial ON T(c1) WHERE c1 IS NOT NULL AND c2 IS NOT NULL)",
+              R"(CREATE INDEX IdxPartial ON T(c1, c2) WHERE c1 IS NOT NULL AND c2 IS NOT NULL)",
               R"(CREATE INDEX IdxNormal ON T(c1))",
           },
           type_factory_.get()));

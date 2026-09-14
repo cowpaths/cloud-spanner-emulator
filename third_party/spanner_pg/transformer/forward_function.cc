@@ -30,6 +30,7 @@
 //------------------------------------------------------------------------------
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -42,14 +43,15 @@
 #include "googlesql/public/id_string.h"
 #include "googlesql/public/input_argument_type.h"
 #include "googlesql/public/types/type.h"
+#include "googlesql/public/value.h"
 #include "googlesql/resolved_ast/resolved_ast.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
-#include "absl/strings/substitute.h"
 #include "absl/types/span.h"
 #include "third_party/spanner_pg/bootstrap_catalog/bootstrap_catalog.h"
 #include "third_party/spanner_pg/catalog/catalog_adapter.h"
@@ -58,14 +60,24 @@
 #include "third_party/spanner_pg/catalog/function_identifier.h"
 #include "third_party/spanner_pg/catalog/type.h"
 #include "third_party/spanner_pg/interface/bootstrap_catalog_data.pb.h"
-#include "third_party/spanner_pg/postgres_includes/all.h"
 #include "third_party/spanner_pg/shims/error_shim.h"
 #include "third_party/spanner_pg/transformer/expr_transformer_helper.h"
 #include "third_party/spanner_pg/transformer/forward_transformer.h"
 #include "third_party/spanner_pg/transformer/transformer_helper.h"
 #include "third_party/spanner_pg/util/pg_list_iterators.h"
 #include "third_party/spanner_pg/util/postgres.h"
+#include "third_party/spanner_pg/src/backend/catalog/pg_type_d.h"
 #include "third_party/spanner_pg/src/backend/utils/fmgroids.h"
+#include "third_party/spanner_pg/src/include/c.h"
+#include "third_party/spanner_pg/src/include/catalog/pg_operator.h"
+#include "third_party/spanner_pg/src/include/catalog/pg_proc.h"
+#include "third_party/spanner_pg/src/include/nodes/makefuncs.h"
+#include "third_party/spanner_pg/src/include/nodes/nodes.h"
+#include "third_party/spanner_pg/src/include/nodes/parsenodes.h"
+#include "third_party/spanner_pg/src/include/nodes/pg_list.h"
+#include "third_party/spanner_pg/src/include/nodes/primnodes.h"
+#include "third_party/spanner_pg/src/include/postgres.h"
+#include "third_party/spanner_pg/src/include/postgres_ext.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_macros.h"
 
@@ -1364,6 +1376,32 @@ ForwardTransformer::BuildGsqlArrayAccess(
         "Assignment to array elements is not supported");
   }
   GOOGLESQL_RET_CHECK_NE(subscripting_ref.refupperindexpr, nullptr);
+  GOOGLESQL_RET_CHECK_NE(subscripting_ref.refexpr, nullptr);
+
+  if (subscripting_ref.refcontainertype == JSONBOID) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<googlesql::ResolvedExpr> array_source,
+        BuildGsqlResolvedExpr(*subscripting_ref.refexpr,
+                              expr_transformer_info));
+    if (subscripting_ref.reflowerindexpr != nullptr &&
+        list_length(subscripting_ref.reflowerindexpr) > 0) {
+      return absl::InvalidArgumentError(
+          "jsonb subscript does not support slices");
+    }
+    std::unique_ptr<googlesql::ResolvedExpr> curr_expr =
+        std::move(array_source);
+    for (Expr* index_node :
+         StructList<Expr*>(subscripting_ref.refupperindexpr)) {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          std::unique_ptr<googlesql::ResolvedExpr> index_expr,
+          BuildGsqlResolvedExpr(*index_node, expr_transformer_info));
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          curr_expr,
+          BuildGsqlJsonbSubscript(std::move(curr_expr), std::move(index_expr)));
+    }
+    return curr_expr;
+  }
+
   if (list_length(subscripting_ref.refupperindexpr) != 1) {
     return absl::InvalidArgumentError(
         "Multi-dimensional arrays are not supported");
@@ -1380,6 +1418,106 @@ ForwardTransformer::BuildGsqlArrayAccess(
   }
   return BuildGsqlResolvedSafeArrayAtOrdinalFunctionCall(subscripting_ref,
                                                          expr_transformer_info);
+}
+
+absl::StatusOr<std::unique_ptr<googlesql::ResolvedExpr>>
+ForwardTransformer::BuildGsqlJsonbSubscript(
+    std::unique_ptr<googlesql::ResolvedExpr> base_expr,
+    std::unique_ptr<googlesql::ResolvedExpr> index_expr) {
+  std::vector<std::unique_ptr<googlesql::ResolvedExpr>> argument_list;
+  argument_list.push_back(std::move(base_expr));
+  argument_list.push_back(std::move(index_expr));
+
+  GOOGLESQL_ASSIGN_OR_RETURN(const googlesql::Function* subscript_fn,
+                   catalog_adapter_->GetEngineSystemCatalog()
+                       ->builtin_function_catalog()
+                       ->GetFunction("$subscript"));
+  if (subscript_fn == nullptr) {
+    return absl::InternalError(
+        "Function $subscript not found in builtin function catalog.");
+  }
+
+  std::vector<googlesql::InputArgumentType> input_arguments =
+      GetInputArgumentTypes(argument_list);
+
+  std::unique_ptr<googlesql::FunctionSignature> concrete_signature;
+  for (const googlesql::FunctionSignature& sig : subscript_fn->signatures()) {
+    if (catalog_adapter_->GetEngineSystemCatalog()->SignatureMatches(
+            input_arguments, sig, &concrete_signature,
+            catalog_adapter_->analyzer_options().language())) {
+      break;
+    }
+  }
+
+  if (concrete_signature == nullptr) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("subscript type ", argument_list[1]->type()->DebugString(),
+                     " is not supported"));
+  }
+
+  return MakeResolvedFunctionCall(
+      FunctionAndSignature(subscript_fn, *concrete_signature),
+      std::move(argument_list));
+}
+
+absl::Status ForwardTransformer::UnrollJsonbSubscriptPath(
+    const SubscriptingRef& ref, ExprTransformerInfo* info,
+    std::vector<std::unique_ptr<googlesql::ResolvedExpr>>* path_elements) {
+  // Based on manual testing PG appears to generate a single SubscriptingRef for
+  // the entire sequence of subscript operations. Double check that this is the
+  // case and that we don't encounter nested SubscriptingRefs.
+  GOOGLESQL_RET_CHECK_NE(nodeTag(ref.refexpr), T_SubscriptingRef)
+      << "nested SubscriptingRef not implemented";
+
+  if (ref.refupperindexpr) {
+    for (Expr* index_expr : StructList<Expr*>(ref.refupperindexpr)) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<googlesql::ResolvedExpr> resolved_index,
+                       BuildGsqlResolvedExpr(*index_expr, info));
+      path_elements->push_back(std::move(resolved_index));
+    }
+  }
+
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::unique_ptr<googlesql::ResolvedFunctionCall>>
+ForwardTransformer::BuildGsqlSpanJsonbSetFunctionCall(
+    std::unique_ptr<googlesql::ResolvedExpr> original_jsonb,
+    SubscriptUpdates updates, ExprTransformerInfo* expr_transformer_info) {
+  std::vector<std::unique_ptr<googlesql::ResolvedExpr>> argument_list;
+  argument_list.push_back(std::move(original_jsonb));
+
+  for (auto& update : updates) {
+    const SubscriptingRef* ref = update.first;
+    std::unique_ptr<googlesql::ResolvedExpr>& value = update.second;
+
+    std::vector<std::unique_ptr<googlesql::ResolvedExpr>> path_elements;
+    GOOGLESQL_RETURN_IF_ERROR(
+        UnrollJsonbSubscriptPath(*ref, expr_transformer_info, &path_elements));
+
+    // Add length of the path.
+    argument_list.push_back(googlesql::MakeResolvedLiteral(
+        googlesql::values::Int64(path_elements.size())));
+    // Add path elements.
+    for (auto& elem : path_elements) {
+      argument_list.push_back(std::move(elem));
+    }
+    // Add value.
+    argument_list.push_back(std::move(value));
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(const googlesql::Function* jsonb_set_fn,
+                   catalog_adapter_->GetEngineSystemCatalog()
+                       ->builtin_function_catalog()
+                       ->GetFunction("spanner.span_jsonb_set"));
+  if (jsonb_set_fn == nullptr) {
+    return absl::UnimplementedError(
+        "UPDATEs with jsonb subfields are not supported.");
+  }
+  GOOGLESQL_RET_CHECK_EQ(jsonb_set_fn->NumSignatures(), 1);
+  return MakeResolvedFunctionCall(
+      FunctionAndSignature(jsonb_set_fn, *jsonb_set_fn->GetSignature(0)),
+      std::move(argument_list));
 }
 
 absl::StatusOr<std::unique_ptr<googlesql::ResolvedExpr>>

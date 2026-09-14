@@ -30,6 +30,7 @@
 //------------------------------------------------------------------------------
 
 #include "third_party/spanner_pg/shims/error_shim.h"
+#include <cstdint>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -40,6 +41,10 @@
 #include "third_party/spanner_pg/util/pg_list_iterators.h"
 #include "third_party/spanner_pg/util/postgres.h"
 #include "third_party/spanner_pg/util/valid_memory_context_fixture.h"
+#include "third_party/spanner_pg/src/include/nodes/parsenodes.h"
+#include "third_party/spanner_pg/src/include/nodes/value.h"
+#include "third_party/spanner_pg/src/include/utils/elog.h"
+#include "third_party/spanner_pg/src/include/utils/palloc.h"
 
 namespace postgres_translator {
 
@@ -341,12 +346,63 @@ TEST_F(ErrorShimTest, CheckedPgListHead) {
 TEST_F(ErrorShimTest, CheckedPgDefGetInt64) {
   char value_str[] = "9223372036854775807";
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      DefElem * defElem,
+      DefElem* def_elem,
       CheckedPgMakeDefElem(
           nullptr, internal::PostgresCastToNode(makeFloat(value_str)), 1));
 
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(int64_t value, CheckedPgDefGetInt64(defElem));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(int64_t value, CheckedPgDefGetInt64(def_elem));
   EXPECT_EQ(value, 9223372036854775807);
+}
+
+TEST_F(ErrorShimTest, CheckedPgDefGetNumericNullPtr) {
+  EXPECT_DEATH((void)CheckedPgDefGetNumeric(nullptr), "");
+}
+
+TEST_F(ErrorShimTest, CheckedPgDefGetNumericFloat) {
+  char value_str[] = "20.5";
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DefElem* def_elem,
+      CheckedPgMakeDefElem(
+          nullptr, internal::PostgresCastToNode(makeFloat(value_str)), 1));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(double value, CheckedPgDefGetNumeric(def_elem));
+  EXPECT_DOUBLE_EQ(value, 20.5);
+}
+
+TEST_F(ErrorShimTest, CheckedPgDefGetNumericInteger) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DefElem* def_elem,
+      CheckedPgMakeDefElem(nullptr,
+                           internal::PostgresCastToNode(makeInteger(20)), 1));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(double value, CheckedPgDefGetNumeric(def_elem));
+  EXPECT_DOUBLE_EQ(value, 20.0);
+}
+
+TEST_F(ErrorShimTest, CheckedPgDefGetNumericInvalidString) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(DefElem* def_elem_null,
+                       CheckedPgMakeDefElem(nullptr, nullptr, 1));
+  EXPECT_FALSE(CheckedPgDefGetNumeric(def_elem_null).ok());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DefElem* def_elem_string,
+      CheckedPgMakeDefElem(
+          nullptr, internal::PostgresCastToNode(makeString(pstrdup("invalid"))),
+          1));
+  EXPECT_FALSE(CheckedPgDefGetNumeric(def_elem_string).ok());
+}
+
+TEST_F(ErrorShimTest, CheckedPgDefGetNumericNumericStringAlsoFail) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(DefElem* def_elem_null,
+                       CheckedPgMakeDefElem(nullptr, nullptr, 1));
+  EXPECT_FALSE(CheckedPgDefGetNumeric(def_elem_null).ok());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DefElem* def_elem_string,
+      CheckedPgMakeDefElem(
+          nullptr, internal::PostgresCastToNode(makeString(pstrdup("20.0"))),
+          1));
+  EXPECT_FALSE(CheckedPgDefGetNumeric(def_elem_string).ok());
 }
 }  // namespace
 }  // namespace postgres_translator

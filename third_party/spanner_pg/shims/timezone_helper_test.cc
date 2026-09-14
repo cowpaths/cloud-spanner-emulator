@@ -98,6 +98,22 @@ TEST(TimezoneHelperTest, FailedInitCleansUp) {
   EXPECT_TRUE(TimezoneCleared());
 }
 
+TEST(TimezoneHelperTest, FailedInitTimezoneCleansUpDirectly) {
+  auto reservation_manager =
+      std::make_unique<postgres_translator::StubMemoryReservationManager>();
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto memory_reservation_holder,
+      MemoryReservationHolder::Create(reservation_manager.get()));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto memory_context, MemoryContextManager::Init("test"));
+
+  ASSERT_THAT(InitTimezone("no such time zone with this name"),
+              StatusIs(absl::StatusCode::kInternal));
+
+  EXPECT_EQ(session_timezone, nullptr);
+  EXPECT_EQ(log_timezone, nullptr);
+  EXPECT_TRUE(TimezoneCleared());
+}
+
 // Ensure low memory exception is converted to status code.
 TEST(TimezoneHelperTest, LowMemory) {
   auto reservation_manager =

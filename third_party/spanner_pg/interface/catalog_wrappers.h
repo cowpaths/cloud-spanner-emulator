@@ -243,6 +243,17 @@ const FormData_pg_proc* GetProcByOid(Oid oid);
 // Flags accessed in shims
 bool ShouldCoerceUnknownLiterals();
 
+// Given an unqualified function name, searches user schemas in the Engine User
+// Catalog for schemas containing this function (excluding pg_catalog, system
+// schemas, and active search path schemas). Returns a palloc'd array of schema
+// name strings and sets num_schemas. Returns NULL if no candidate schemas
+// were found.
+char** FindCandidateSchemasForUnqualifiedFunctionC(const char* func_name,
+                                                   int* num_schemas);
+
+// Returns true if search_path error hints are enabled.
+bool IsSearchPathFeatureEnabledC();
+
 #ifdef __cplusplus
 }
 #endif  // ifdef __cplusplus

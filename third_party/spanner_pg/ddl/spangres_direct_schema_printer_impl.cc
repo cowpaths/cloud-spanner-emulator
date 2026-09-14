@@ -1030,6 +1030,8 @@ std::string SpangresSchemaPrinterImpl::FormatOptionAsNameValuePair(
                                            : PGConstants::kPgFalseLiteral);
   } else if (option.has_int64_value()) {
     StrAppend(&output, option.int64_value());
+  } else if (option.has_double_value()) {
+    StrAppend(&output, option.double_value());
   } else {
     StrAppend(&output, QuoteStringLiteral(option.string_value()));
   }

@@ -46,6 +46,8 @@
 #include "third_party/spanner_pg/interface/parser_output.h"
 #include "third_party/spanner_pg/postgres_includes/all.h"
 #include "third_party/spanner_pg/postgres_includes/deparser.h"
+#include "third_party/spanner_pg/src/include/commands/defrem.h"
+#include "third_party/spanner_pg/src/include/nodes/parsenodes.h"
 #include "third_party/spanner_pg/src/spangres/parser.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_macros.h"
@@ -691,6 +693,10 @@ absl::StatusOr<pg_tz*> CheckedPgTZOffsetSet(int32_t gmt_offset) {
 
 absl::StatusOr<int64_t> CheckedPgDefGetInt64(DefElem* def) {
   return ErrorCheckedPgCall(defGetInt64, def);
+}
+
+absl::StatusOr<double> CheckedPgDefGetNumeric(DefElem* def) {
+  return ErrorCheckedPgCall(defGetNumeric, def);
 }
 
 }  // namespace postgres_translator

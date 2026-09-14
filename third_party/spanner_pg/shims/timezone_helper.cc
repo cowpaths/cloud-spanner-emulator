@@ -45,7 +45,7 @@ namespace postgres_translator {
 constexpr inline absl::string_view gmt_timezone = "GMT";
 constexpr inline absl::string_view utc_timezone = "UTC";
 
-absl::Status InitTimezone(const char* time_zone_name) {
+static absl::Status InitTimezoneImpl(const char* time_zone_name) {
   GOOGLESQL_RET_CHECK_NE(CurrentMemoryContext, nullptr)
       << "Must set up memory contexts on this thread before initializing "
          "timezone data. See MemoryContextManager.";
@@ -65,7 +65,15 @@ absl::Status InitTimezone(const char* time_zone_name) {
   return absl::OkStatus();
 }
 
-absl::Status InitTimezoneOffset(int32_t gmt_offset) {
+absl::Status InitTimezone(const char* time_zone_name) {
+  absl::Status status = InitTimezoneImpl(time_zone_name);
+  if (!status.ok()) {
+    CleanupTimezone();
+  }
+  return status;
+}
+
+static absl::Status InitTimezoneOffsetImpl(int32_t gmt_offset) {
   GOOGLESQL_RET_CHECK_NE(CurrentMemoryContext, nullptr)
       << "Must set up memory contexts on this thread before initializing "
          "timezone data. See MemoryContextManager.";
@@ -77,6 +85,14 @@ absl::Status InitTimezoneOffset(int32_t gmt_offset) {
   GOOGLESQL_RET_CHECK_NE(session_timezone, nullptr);
   GOOGLESQL_RET_CHECK_NE(log_timezone, nullptr);
   return absl::OkStatus();
+}
+
+absl::Status InitTimezoneOffset(int32_t gmt_offset) {
+  absl::Status status = InitTimezoneOffsetImpl(gmt_offset);
+  if (!status.ok()) {
+    CleanupTimezone();
+  }
+  return status;
 }
 
 void CleanupTimezone() {

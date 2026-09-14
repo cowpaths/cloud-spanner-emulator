@@ -399,6 +399,11 @@ absl::Status IndexRefsTableKeyAsStoredColumn(absl::string_view index_name,
                                              absl::string_view base_table);
 absl::Status IndexRefsNonExistentColumn(absl::string_view index_name,
                                         absl::string_view column_name);
+absl::Status CannotNullFilterColumnNotInIndex(absl::string_view column_name,
+                                              absl::string_view index_name);
+absl::Status IndexRefsNonexistentColumnNullFiltered(
+    absl::string_view index_name, absl::string_view column_name);
+absl::Status IndexCannotUseBothNullFiltered(absl::string_view index_name);
 absl::Status AlteringParentColumn(absl::string_view column_name);
 absl::Status ChangingNullConstraintOnIndexedColumn(
     absl::string_view column_name, absl::string_view index_name);
