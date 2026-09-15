@@ -216,6 +216,7 @@ absl::Status CheckedPgTimezoneInitialize(void);
 absl::StatusOr<pg_tz*> CheckedPgTZOffsetSet(int32_t gmt_offset);
 
 absl::StatusOr<int64_t> CheckedPgDefGetInt64(DefElem* def);
+absl::StatusOr<double> CheckedPgDefGetNumeric(DefElem* def);
 
 }  // namespace postgres_translator
 

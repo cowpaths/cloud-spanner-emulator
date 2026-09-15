@@ -198,7 +198,6 @@ cc_library(
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@com_google_googleapis//google/spanner/admin/database/v1:database_cc_proto",
-        "@com_google_googlesql//googlesql/base:logging",
         "@com_google_googlesql//googlesql/base:ret_check",
         "@com_google_googlesql//googlesql/public:analyzer",
         "@com_google_googlesql//googlesql/public:analyzer_options",

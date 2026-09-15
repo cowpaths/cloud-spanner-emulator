@@ -1851,6 +1851,31 @@ absl::Status IndexRefsNonExistentColumn(absl::string_view index_name,
                        index_name, column_name));
 }
 
+absl::Status CannotNullFilterColumnNotInIndex(absl::string_view column_name,
+                                              absl::string_view index_name) {
+  return absl::Status(
+      absl::StatusCode::kUnimplemented,
+      absl::Substitute(
+          "Cannot null-filter column $0 that is not in the index  $1.",
+          column_name, index_name));
+}
+
+absl::Status IndexRefsNonexistentColumnNullFiltered(
+    absl::string_view index_name, absl::string_view column_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute(
+          "Index $0 specifies a null filter on a nonexistent column $1.",
+          index_name, column_name));
+}
+
+absl::Status IndexCannotUseBothNullFiltered(absl::string_view index_name) {
+  return absl::Status(absl::StatusCode::kFailedPrecondition,
+                      absl::Substitute("Index $0 cannot use the keyword "
+                                       "NULL_FILTERED and have a WHERE clause.",
+                                       index_name));
+}
+
 absl::Status AlteringParentColumn(absl::string_view column_name) {
   return absl::Status(
       absl::StatusCode::kInvalidArgument,

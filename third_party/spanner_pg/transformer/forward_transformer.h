@@ -39,16 +39,20 @@
 #include <utility>
 #include <vector>
 
-#include "googlesql/base/logging.h"
 #include "googlesql/public/analyzer_options.h"
 #include "googlesql/public/catalog.h"
 #include "googlesql/public/coercer.h"
+#include "googlesql/public/function_signature.h"
 #include "googlesql/public/id_string.h"
+#include "googlesql/public/input_argument_type.h"
+#include "googlesql/public/table_valued_function.h"
 #include "googlesql/public/types/type.h"
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "googlesql/resolved_ast/resolved_column.h"
+#include "googlesql/resolved_ast/resolved_node.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/flags/declare.h"
+#include "absl/flags/flag.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
@@ -58,10 +62,17 @@
 #include "third_party/spanner_pg/catalog/catalog_adapter.h"
 #include "third_party/spanner_pg/datatypes/extended/pg_jsonb_type.h"
 #include "third_party/spanner_pg/interface/bootstrap_catalog_data.pb.h"
-#include "third_party/spanner_pg/postgres_includes/all.h"
 #include "third_party/spanner_pg/transformer/expr_transformer_helper.h"
 #include "third_party/spanner_pg/transformer/transformer_helper.h"
-#include "third_party/spanner_pg/util/pg_list_iterators.h"
+#include "third_party/spanner_pg/src/include/access/attnum.h"
+#include "third_party/spanner_pg/src/include/c.h"
+#include "third_party/spanner_pg/src/include/catalog/pg_proc.h"
+#include "third_party/spanner_pg/src/include/nodes/nodes.h"
+#include "third_party/spanner_pg/src/include/nodes/parsenodes.h"
+#include "third_party/spanner_pg/src/include/nodes/pg_list.h"
+#include "third_party/spanner_pg/src/include/nodes/primnodes.h"
+#include "third_party/spanner_pg/src/include/postgres.h"
+#include "third_party/spanner_pg/src/include/postgres_ext.h"
 
 ABSL_DECLARE_FLAG(bool, spangres_include_invalid_statement_parse_locations);
 ABSL_DECLARE_FLAG(int64_t, spangres_expression_recursion_limit);
@@ -641,6 +652,15 @@ class ForwardTransformer {
   BuildPartialGsqlResolvedCallStmt(const FuncExpr& func);
 
  private:
+  // A list of subscript updates for a single column. For example, given,
+  //   SET jsonb_col['foo']['bar'] = '5', jsonb_col['baz'] = '6'
+  //
+  // Then SubscriptUpdates would have two elements for jsonb_col:
+  //   {{"foo", "bar"}, "5"} and {{"baz"}, "6"}
+  using SubscriptUpdates =
+      std::vector<std::pair<const SubscriptingRef*,
+                            std::unique_ptr<googlesql::ResolvedExpr>>>;
+
   // Builds a list of GoogleSQL ResolvedDMLValue from a PostgreSQL list of
   // Expr objects
   absl::StatusOr<
@@ -684,6 +704,36 @@ class ForwardTransformer {
       const VarIndexScope& update_value_scope, const std::string& clause_name,
       std::vector<std::unique_ptr<const googlesql::ResolvedUpdateItem>>&
           update_item_list);
+
+  // Helper function to explicitly collect information about subscript updates
+  // from a list of TargetEntry objects.
+  absl::StatusOr<SubscriptUpdates> CollectSubscriptUpdates(
+      const std::vector<TargetEntry*>& entries,
+      const VarIndexScope& update_value_scope, const std::string& clause_name);
+
+  // Unrolls a subscripting ref created by the postgres analyzer and populates
+  // the path_elements when forward transforming an `UPDATE` jsonb subscript
+  // assignment.
+  //
+  // For example:
+  // UPDATE table_with_jsonb SET jsonb_column['a']['b'] = '1'
+  // will have a `TargetEntry` with a `SubscriptingRef` containing
+  // the elements stored in a `refupperindexpr`.
+  //
+  // TARGETEXPR:
+  //   expr: SUBSCRIPTINGREF
+  //     refupperindexpr ({CONST}, {CONST})
+  //
+  // `path_elements` will then be populated as {"a", "b"}.
+  absl::Status UnrollJsonbSubscriptPath(
+      const SubscriptingRef& ref, ExprTransformerInfo* info,
+      std::vector<std::unique_ptr<googlesql::ResolvedExpr>>* path_elements);
+
+  // Builds a span_jsonb_set function call with a list of updates.
+  absl::StatusOr<std::unique_ptr<googlesql::ResolvedFunctionCall>>
+  BuildGsqlSpanJsonbSetFunctionCall(
+      std::unique_ptr<googlesql::ResolvedExpr> original_jsonb,
+      SubscriptUpdates updates, ExprTransformerInfo* expr_transformer_info);
 
   // Builds a GoogleSQL ResolvedOnConflictClause for the INSERT DML statements,
   // using the input PostgreSQL `OnConflictExpr`. `pg_on_conflict` must be a
@@ -959,6 +1009,10 @@ class ForwardTransformer {
   absl::StatusOr<std::unique_ptr<googlesql::ResolvedExpr>> BuildGsqlArrayAccess(
       const SubscriptingRef& subscripting_ref,
       ExprTransformerInfo* expr_transformer_info);
+
+  absl::StatusOr<std::unique_ptr<googlesql::ResolvedExpr>>
+  BuildGsqlJsonbSubscript(std::unique_ptr<googlesql::ResolvedExpr> base_expr,
+                          std::unique_ptr<googlesql::ResolvedExpr> index_expr);
 
   // Transform a SubscriptingRef into a function call for array element
   // accesses: array_value[4]. Supports only read-only accesses (SELECT), not

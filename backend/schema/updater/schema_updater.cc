@@ -27,7 +27,6 @@
 #include <utility>
 #include <vector>
 
-#include "googlesql/base/logging.h"
 #include "google/spanner/admin/database/v1/common.pb.h"
 #include "googlesql/public/analyzer.h"
 #include "googlesql/public/analyzer_options.h"
@@ -920,13 +919,12 @@ SchemaUpdaterImpl::ApplyDDLStatement(
                 create_function->has_sql_body_origin() &&
                 create_function->sql_body_origin().has_original_expression());
 
-            absl::StatusOr<std::unique_ptr<SpangresSchemaPrinter>> printer =
-                postgres_translator::spangres::
-                    CreateSpangresDirectSchemaPrinter();
+            GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<SpangresSchemaPrinter> printer,
+                             postgres_translator::spangres::
+                                 CreateSpangresDirectSchemaPrinter());
             const ddl::DDLStatement& statement = *ddl_statement;
-            GOOGLESQL_ASSIGN_OR_RETURN(
-                std::vector<std::string> pg_printed,
-                (*printer)->PrintDDLStatementForEmulator(statement));
+            GOOGLESQL_ASSIGN_OR_RETURN(std::vector<std::string> pg_printed,
+                             printer->PrintDDLStatementForEmulator(statement));
             GOOGLESQL_RET_CHECK_EQ(pg_printed.size(), 1);
 
             result = TranslatePostgreSqlQueryInUdf(
@@ -1642,7 +1640,7 @@ absl::Status SchemaUpdaterImpl::AlterColumnSetDropDefault(
     editor->set_udf_dependencies(udf_dependencies);
     editor->set_is_pending_commit_timestamp(is_pending_commit_timestamp);
     const Column* existing_column =
-        table->FindColumn(alter_column.column().column_name());
+        table->FindColumnCaseSensitive(alter_column.column().column_name());
     if (existing_column == nullptr) {
       return error::ColumnNotFound(table->Name(),
                                    alter_column.column().column_name());
@@ -1884,7 +1882,8 @@ absl::Status SchemaUpdaterImpl::SetColumnDefinition(
 
   // For the case of removing a vector length param in ALTER TABLE ALTER COLUMN.
   if (ddl_create_table == nullptr) {
-    const Column* column = table->FindColumn(ddl_column.column_name());
+    const Column* column =
+        table->FindColumnCaseSensitive(ddl_column.column_name());
     if (column != nullptr && column->has_vector_length() &&
         !ddl_column.has_vector_length()) {
       return error::CannotAlterColumnToRemoveVectorLength(
@@ -1893,7 +1892,8 @@ absl::Status SchemaUpdaterImpl::SetColumnDefinition(
   }
 
   // Do not allow a column to convert to and stop being an identity column.
-  const Column* old_column = table->FindColumn(ddl_column.column_name());
+  const Column* old_column =
+      table->FindColumnCaseSensitive(ddl_column.column_name());
   if (old_column != nullptr &&
       old_column->is_identity_column() != ddl_column.has_identity_column()) {
     if (ddl_column.has_identity_column()) {
@@ -2095,7 +2095,7 @@ absl::Status SchemaUpdaterImpl::SetColumnDefinition(
     // TABLE ADD COLUMN.
     if (ddl_create_table != nullptr ||
         (ddl_create_table == nullptr &&
-         table->FindColumn(ddl_column.column_name()) == nullptr)) {
+         table->FindColumnCaseSensitive(ddl_column.column_name()) == nullptr)) {
       modifier->set_vector_length(ddl_column.vector_length());
     } else {
       // For the case of adding or editing `vector_length` param in ALTER TABLE
@@ -2110,7 +2110,8 @@ absl::Status SchemaUpdaterImpl::SetColumnDefinition(
   }
 
   if (is_alter) {
-    const Column* existing_column = table->FindColumn(ddl_column.column_name());
+    const Column* existing_column =
+        table->FindColumnCaseSensitive(ddl_column.column_name());
     if (existing_column == nullptr) {
       return error::ColumnNotFound(table->Name(), ddl_column.column_name());
     }
@@ -3776,16 +3777,6 @@ SchemaUpdaterImpl::CreateIndexDataTable(
     columns_used_by_index->stored_columns.push_back(column);
   }
 
-  // Add null filtered columns to index data table.
-  if (null_filtered_columns != nullptr) {
-    // Add null filtered columns to index data table.
-    for (const std::string& column_name : *null_filtered_columns) {
-      GOOGLESQL_RETURN_IF_ERROR(AddIndexColumnsByName(
-          column_name, indexed_table, /*is_null_filtered=*/true,
-          columns_used_by_index->null_filtered_columns, builder));
-    }
-  }
-
   if (partition_by != nullptr) {
     // Add partition by columns to index data table
     GOOGLESQL_RETURN_IF_ERROR(AddSearchIndexColumns(
@@ -3798,9 +3789,11 @@ SchemaUpdaterImpl::CreateIndexDataTable(
       const std::string& column_name = ddl_key_part.key_name();
       std::vector<const Column*> columns;
       // Add column to index data table.
-      GOOGLESQL_RETURN_IF_ERROR(AddIndexColumnsByName(column_name, indexed_table,
-                                            index->is_null_filtered(), columns,
-                                            builder));
+      GOOGLESQL_RETURN_IF_ERROR(AddIndexColumnsByName(
+          column_name, indexed_table,
+          index->is_null_filtered() ||
+              null_filtered_columns_set.contains(column_name),
+          columns, builder));
 
       // ORDER BY columns cannot be unsupported key column types.
       if (!IsSupportedKeyColumnType(columns[0]->GetType(),
@@ -3815,6 +3808,23 @@ SchemaUpdaterImpl::CreateIndexDataTable(
           const KeyColumn* order_by_column,
           CreatePrimaryKeyColumn(ddl_key_part, builder.get(), &key_builder));
       columns_used_by_index->order_by_columns.push_back(order_by_column);
+    }
+  }
+
+  // Validate and record null filtered columns for the index.
+  if (null_filtered_columns != nullptr) {
+    for (const std::string& column_name : *null_filtered_columns) {
+      const Column* column =
+          builder.get()->FindColumnCaseSensitive(column_name);
+      if (column == nullptr) {
+        if (indexed_table->FindColumnCaseSensitive(column_name) != nullptr) {
+          return error::CannotNullFilterColumnNotInIndex(column_name,
+                                                         index_name);
+        }
+        return error::IndexRefsNonexistentColumnNullFiltered(index_name,
+                                                             column_name);
+      }
+      columns_used_by_index->null_filtered_columns.push_back(column);
     }
   }
 
@@ -4291,6 +4301,11 @@ absl::StatusOr<const Index*> SchemaUpdaterImpl::CreateIndexHelper(
 
   // Tables and indexes share a namespace.
   GOOGLESQL_RETURN_IF_ERROR(global_names_.AddName("Index", index_name));
+
+  if (is_null_filtered && null_filtered_columns != nullptr &&
+      !null_filtered_columns->empty()) {
+    return error::IndexCannotUseBothNullFiltered(index_name);
+  }
 
   Index::Builder builder;
   std::optional<uint32_t> oid = pg_oid_assigner_->GetNextPostgresqlOid();
@@ -5520,7 +5535,7 @@ absl::Status SchemaUpdaterImpl::AlterTable(
     case ddl::AlterTable::kAlterColumn: {
       const std::string& column_name =
           alter_table.alter_column().column().column_name();
-      const Column* column = table->FindColumn(column_name);
+      const Column* column = table->FindColumnCaseSensitive(column_name);
       if (column == nullptr) {
         return error::ColumnNotFound(table->Name(), column_name);
       }
@@ -5605,7 +5620,8 @@ absl::Status SchemaUpdaterImpl::AlterTable(
       return absl::OkStatus();
     }
     case ddl::AlterTable::kDropColumn: {
-      const Column* column = table->FindColumn(alter_table.drop_column());
+      const Column* column =
+          table->FindColumnCaseSensitive(alter_table.drop_column());
       if (column == nullptr) {
         return error::ColumnNotFound(table->Name(), alter_table.drop_column());
       }
@@ -6172,7 +6188,7 @@ absl::Status SchemaUpdaterImpl::DropTable(const ddl::DropTable& drop_table) {
          change_stream != change_streams_explicitly_tracking_table.end();
          ++change_stream) {
       if (change_stream != change_streams_explicitly_tracking_table.begin()) {
-        change_stream_names += ",";
+        change_stream_names += ',';
       }
       change_stream_names += (*change_stream)->Name();
     }

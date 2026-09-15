@@ -733,6 +733,11 @@ group {
     name: "InvalidTypeCoercion"
     pg_message_id: "%s types %s and %s cannot be matched"
   }
+
+  message {
+    name: "InvalidJsonbSubscriptAssignment"
+    pg_message_id: "jsonb subscript does not support slices"
+  }
 }
 
 group {

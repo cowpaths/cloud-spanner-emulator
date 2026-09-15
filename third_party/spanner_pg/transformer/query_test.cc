@@ -29,7 +29,9 @@
 // MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 //------------------------------------------------------------------------------
 
+#include <cstdint>
 #include <memory>
+#include <ostream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -52,6 +54,7 @@
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_replace.h"
 #include "absl/strings/str_split.h"
@@ -70,8 +73,6 @@
 #include "third_party/spanner_pg/util/postgres.h"
 #include "third_party/spanner_pg/util/unittest_utils.h"
 #include "third_party/spanner_pg/util/valid_memory_context_fixture.h"
-#include "re2/re2.h"
-#include "googlesql/base/status_macros.h"
 
 namespace postgres_translator::spangres::test {
 namespace {
@@ -1373,6 +1374,19 @@ absl::StatusOr<const googlesql::ResolvedTableScan*> GetTableScan(
   GOOGLESQL_RET_CHECK_EQ(nodes.size(), 1)
       << "This helper only supports statements with a single table scan";
   return nodes[0]->GetAs<googlesql::ResolvedTableScan>();
+}
+
+// Helper function to extract the single UpdateStmt from a GoogleSQL
+// AnalyzerOutput. Currently this only supports statements with a single
+// UpdateStmt.
+absl::StatusOr<const googlesql::ResolvedUpdateStmt*> GetResolvedUpdateStmt(
+    const googlesql::AnalyzerOutput* analyzer_output) {
+  std::vector<const googlesql::ResolvedNode*> nodes;
+  analyzer_output->resolved_statement()->GetDescendantsSatisfying(
+      &googlesql::ResolvedNode::Is<googlesql::ResolvedUpdateStmt>, &nodes);
+  GOOGLESQL_RET_CHECK_EQ(nodes.size(), 1)
+      << "This helper only supports statements with a single update statement";
+  return nodes[0]->GetAs<googlesql::ResolvedUpdateStmt>();
 }
 
 TEST(TransformerTest, PruneUnusedPrunesOneColumn) {

@@ -143,6 +143,26 @@ absl::Status IndexValidator::Validate(const Index* index,
     stored_set.insert(column_name);
   }
 
+  // An index can use either the keyword NULL_FILTERED or a WHERE
+  // clause, but never both at the same time.
+  if (index->is_null_filtered_ && !index->null_filtered_columns_.empty()) {
+    return error::IndexCannotUseBothNullFiltered(index->name_);
+  }
+
+  for (const auto* column : index->null_filtered_columns_) {
+    const std::string& column_name = column->Name();
+    if (index->index_data_table_->FindColumn(column_name) != nullptr) {
+      continue;
+    }
+    // Return error if the column is in base table but not in index data table.
+    if (index->indexed_table_->FindColumn(column_name) != nullptr) {
+      return error::CannotNullFilterColumnNotInIndex(column_name, index->name_);
+    }
+    // Return error if the column does not exist in the table.
+    return error::IndexRefsNonexistentColumnNullFiltered(index->name_,
+                                                         column_name);
+  }
+
   if (index->parent()) {
     const Table* table = index->indexed_table_;
     while (table != index->parent() && table->parent()) {
@@ -269,8 +289,15 @@ absl::Status IndexValidator::ValidateUpdate(const Index* index,
     } else {
       // Cannot change nullability of key columns for non-null filtered
       // indexes.
-      if (old_key->column()->is_nullable() !=
-          new_key->column()->is_nullable()) {
+      const Column* old_source = old_key->column()->source_column();
+      const Column* new_source = new_key->column()->source_column();
+      bool old_nullable = old_source != nullptr
+                              ? old_source->is_nullable()
+                              : old_key->column()->is_nullable();
+      bool new_nullable = new_source != nullptr
+                              ? new_source->is_nullable()
+                              : new_key->column()->is_nullable();
+      if (old_nullable != new_nullable) {
         return error::ChangingNullConstraintOnIndexedColumn(
             new_key->column()->Name(), index->name_);
       }

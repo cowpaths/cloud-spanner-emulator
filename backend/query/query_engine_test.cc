@@ -3844,6 +3844,43 @@ TEST_P(QueryEngineTest, ExecuteSqlDeleteReturning) {
                                         ValueList{Int64(4), String("four")})));
 }
 
+TEST_P(QueryEngineTest, ExecuteSqlDeleteAssertRowsModified) {
+  if (GetParam() == POSTGRESQL) {
+    // TODO: Enable for PG once ASSERT_ROWS_MODIFIED is
+    // exported in Spangres OSS.
+    GTEST_SKIP();
+  }
+  MockRowWriter writer;
+  EXPECT_CALL(
+      writer,
+      Write(Property(&Mutation::ops,
+                     ElementsAre(AllOf(
+                         Field(&MutationOp::type, MutationOpType::kDelete),
+                         Field(&MutationOp::table, "test_table"),
+                         Field(&MutationOp::key_set,
+                               Property(&KeySet::keys, UnorderedElementsAre(Key{
+                                                           {Int64(1)}}))))))))
+      .WillOnce(Return(absl::OkStatus()));
+
+  // Matching row count succeeds.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      QueryResult result,
+      query_engine().ExecuteSql(Query{"DELETE FROM test_table WHERE int64_col "
+                                      "= 1 ASSERT_ROWS_MODIFIED 1"},
+                                QueryContext{schema(), reader(), &writer}));
+  EXPECT_EQ(result.modified_row_count, 1);
+
+  // Mismatching row count fails with OutOfRange error.
+  EXPECT_THAT(
+      query_engine().ExecuteSql(Query{"DELETE FROM test_table WHERE int64_col "
+                                      "= 1 ASSERT_ROWS_MODIFIED 2"},
+                                QueryContext{schema(), reader(), &writer}),
+      StatusIs(
+          absl::StatusCode::kOutOfRange,
+          HasSubstr(
+              "ASSERT_ROWS_MODIFIED expected 2 rows modified, but found 1")));
+}
+
 TEST_P(QueryEngineTest, ExecuteSqlUpdatesReturning) {
   std::string returning =
       (GetParam() == POSTGRESQL) ? "RETURNING" : "THEN RETURN";

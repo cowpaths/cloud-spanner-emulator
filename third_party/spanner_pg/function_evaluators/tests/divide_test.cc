@@ -64,6 +64,13 @@ TEST_F(DivideTest, ReturnsDivisionOfGivenNumbers) {
   EXPECT_THAT(Divide("0.000", "2.0"), IsOkAndHolds("0.00000000000000000000"));
 }
 
+TEST_F(DivideTest, HandlesCarryCascadeUnderflow) {
+  EXPECT_THAT(Divide("999999999999999999999999999", "1000000000"),
+              IsOkAndHolds("1000000000000000000"));
+  EXPECT_THAT(Divide("999999999999999999", "1000000000"),
+              IsOkAndHolds("1000000000.00000000"));
+}
+
 TEST_F(DivideTest, ReturnsNaNWhenAtLeastOneInputIsNaN) {
   EXPECT_THAT(Divide(kPGNumericNaN, "2.0"), IsOkAndHolds(kPGNumericNaN));
   EXPECT_THAT(Divide("2.0", kPGNumericNaN), IsOkAndHolds(kPGNumericNaN));

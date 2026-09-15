@@ -281,6 +281,127 @@ TEST_P(SchemaUpdaterTest, CreateIndexWhereIsNotNull) {
   }
 }
 
+TEST_P(SchemaUpdaterTest, CreateIndex_CannotNullFilterColumnNotInIndex) {
+  if (GetParam() == POSTGRESQL) {
+    EXPECT_THAT(CreateSchema({R"sql(
+          CREATE TABLE foo (
+            id bigint NOT NULL,
+            bar bigint,
+            baz bigint,
+            PRIMARY KEY (id)
+          )
+        )sql",
+                              R"sql(
+          CREATE INDEX idx_foo_baz ON foo (baz) WHERE bar IS NOT NULL
+        )sql"},
+                             /*proto_descriptor_bytes=*/"",
+                             /*dialect=*/POSTGRESQL,
+                             /*use_gsql_to_pg_translation=*/false),
+                StatusIs(error::CannotNullFilterColumnNotInIndex(
+                    "bar", "idx_foo_baz")));
+  } else {
+    EXPECT_THAT(CreateSchema({R"sql(
+          CREATE TABLE foo (
+            id INT64 NOT NULL,
+            bar INT64,
+            baz INT64,
+          ) PRIMARY KEY (id)
+        )sql",
+                              R"sql(
+          CREATE INDEX idx_foo_baz ON foo (baz) WHERE bar IS NOT NULL
+        )sql"}),
+                StatusIs(error::CannotNullFilterColumnNotInIndex(
+                    "bar", "idx_foo_baz")));
+  }
+}
+
+TEST_P(SchemaUpdaterTest, CreateIndex_IndexRefsNonexistentColumnNullFiltered) {
+  if (GetParam() == POSTGRESQL) {
+    EXPECT_THAT(CreateSchema({R"sql(
+          CREATE TABLE foo (
+            id bigint NOT NULL,
+            baz bigint,
+            PRIMARY KEY (id)
+          )
+        )sql",
+                              R"sql(
+          CREATE INDEX idx_foo_baz ON foo (baz) WHERE nonexistent IS NOT NULL
+        )sql"},
+                             /*proto_descriptor_bytes=*/"",
+                             /*dialect=*/POSTGRESQL,
+                             /*use_gsql_to_pg_translation=*/false),
+                StatusIs(error::IndexRefsNonexistentColumnNullFiltered(
+                    "idx_foo_baz", "nonexistent")));
+  } else {
+    EXPECT_THAT(CreateSchema({R"sql(
+          CREATE TABLE foo (
+            id INT64 NOT NULL,
+            baz INT64,
+          ) PRIMARY KEY (id)
+        )sql",
+                              R"sql(
+          CREATE INDEX idx_foo_baz ON foo (baz) WHERE nonexistent IS NOT NULL
+        )sql"}),
+                StatusIs(error::IndexRefsNonexistentColumnNullFiltered(
+                    "idx_foo_baz", "nonexistent")));
+  }
+}
+
+TEST_P(SchemaUpdaterTest, CreateIndex_IndexCannotUseBothNullFiltered) {
+  if (GetParam() == POSTGRESQL) GTEST_SKIP();
+  EXPECT_THAT(CreateSchema({R"sql(
+        CREATE TABLE foo (
+          id INT64 NOT NULL,
+          baz INT64,
+        ) PRIMARY KEY (id)
+      )sql",
+                            R"sql(
+        CREATE NULL_FILTERED INDEX idx_foo_baz ON foo (baz) WHERE baz IS NOT NULL
+      )sql"}),
+              StatusIs(error::IndexCannotUseBothNullFiltered("idx_foo_baz")));
+}
+
+TEST_P(SchemaUpdaterTest, CreateIndex_NullFilteredOnStoredOrPrimaryKeyColumn) {
+  if (GetParam() == POSTGRESQL) {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
+                         CreateSchema({R"sql(
+          CREATE TABLE foo (
+            id bigint NOT NULL,
+            bar bigint,
+            baz bigint,
+            PRIMARY KEY (id)
+          )
+        )sql",
+                                       R"sql(
+          CREATE INDEX idx_foo_pk ON foo (baz) WHERE id IS NOT NULL
+        )sql",
+                                       R"sql(
+          CREATE INDEX idx_foo_stored ON foo (baz) INCLUDE (bar) WHERE bar IS NOT NULL
+        )sql"},
+                                      /*proto_descriptor_bytes=*/"",
+                                      /*dialect=*/POSTGRESQL,
+                                      /*use_gsql_to_pg_translation=*/false));
+    EXPECT_NE(schema->FindIndex("idx_foo_pk"), nullptr);
+    EXPECT_NE(schema->FindIndex("idx_foo_stored"), nullptr);
+  } else {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"sql(
+          CREATE TABLE foo (
+            id INT64 NOT NULL,
+            bar INT64,
+            baz INT64,
+          ) PRIMARY KEY (id)
+        )sql",
+                                                    R"sql(
+          CREATE INDEX idx_foo_pk ON foo (baz) WHERE id IS NOT NULL
+        )sql",
+                                                    R"sql(
+          CREATE INDEX idx_foo_stored ON foo (baz) STORING (bar) WHERE bar IS NOT NULL
+        )sql"}));
+    EXPECT_NE(schema->FindIndex("idx_foo_pk"), nullptr);
+    EXPECT_NE(schema->FindIndex("idx_foo_stored"), nullptr);
+  }
+}
+
 TEST_P(SchemaUpdaterTest, CreateIndexIfNotExistsOnExistingIndex) {
   // IF NOT EXISTS isn't yet supported on the PG side of the emulator
   if (GetParam() == POSTGRESQL) GTEST_SKIP();
@@ -2037,7 +2158,8 @@ TEST_P(SchemaUpdaterTest, CreateVectorIndexBasicIndexErrors) {
       CREATE VECTOR INDEX VI ON Base(Embeddings) WHERE NonExistent IS NOT NULL
         OPTIONS(distance_type = 'COSINE')
     )sql"}),
-              StatusIs(error::IndexRefsNonExistentColumn("VI", "NonExistent")));
+              StatusIs(error::IndexRefsNonexistentColumnNullFiltered(
+                  "VI", "NonExistent")));
 }
 
 TEST_P(SchemaUpdaterTest, CreateVectorIndexNonArrayTypeError) {

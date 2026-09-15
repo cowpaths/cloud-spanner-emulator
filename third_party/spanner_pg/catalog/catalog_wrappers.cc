@@ -31,6 +31,7 @@
 
 #include "third_party/spanner_pg/interface/catalog_wrappers.h"
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -38,6 +39,7 @@
 #include "absl/log/absl_log.h"
 #include "googlesql/public/catalog.h"
 #include "googlesql/public/function_signature.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -1536,3 +1538,97 @@ extern "C" int GetFunctionArgInfo(Oid proc_oid, Oid **p_argtypes,
                                       ERRCODE_INTERNAL_ERROR, "Proc not found");
   return 0;  // Unreachable.
 }
+
+extern "C" char** FindCandidateSchemasForUnqualifiedFunctionC(
+    const char* func_name, int* num_schemas) {
+  constexpr int ERROR = PG_ERROR;
+  if (num_schemas == nullptr || func_name == nullptr) {
+    ereport(ERROR,
+            (errcode(ERRCODE_INTERNAL_ERROR),
+             errmsg("Invalid null argument passed to "
+                    "FindCandidateSchemasForUnqualifiedFunctionC")));
+    return nullptr;
+  }
+  *num_schemas = 0;
+  auto adapter_status = postgres_translator::GetCatalogAdapter();
+  if (!adapter_status.ok()) {
+    postgres_translator::ereport_helper(adapter_status.status(),
+                                        ERRCODE_INTERNAL_ERROR,
+                                        "CatalogAdapter not found");
+    return nullptr;
+  }
+  postgres_translator::CatalogAdapter* adapter = adapter_status.value();
+  postgres_translator::EngineUserCatalog* user_catalog =
+      adapter->GetEngineUserCatalog();
+  if (user_catalog == nullptr) {
+    ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+                    errmsg("EngineUserCatalog not found in CatalogAdapter")));
+    return nullptr;
+  }
+
+  // If the function already exists in the active search path, any resolution
+  // failure is due to an argument mismatch rather than a missing schema. Return
+  // early so the caller can emit the standard argument mismatch error.
+  const googlesql::Function* search_path_fn = nullptr;
+  if (user_catalog->FindFunction({func_name}, &search_path_fn).ok() &&
+      search_path_fn != nullptr) {
+    return nullptr;
+  }
+  const googlesql::TableValuedFunction* search_path_tvf = nullptr;
+  if (user_catalog
+          ->FindTableValuedFunction({func_name}, &search_path_tvf)
+          .ok() &&
+      search_path_tvf != nullptr) {
+    return nullptr;
+  }
+
+  absl::flat_hash_set<const googlesql::Catalog*> subcatalogs;
+  absl::Status catalogs_status = user_catalog->GetCatalogs(&subcatalogs);
+  if (!catalogs_status.ok()) {
+    postgres_translator::ereport_helper(
+        catalogs_status, ERRCODE_INTERNAL_ERROR,
+        "Failed to retrieve subcatalogs for function suggestion");
+    return nullptr;
+  }
+  std::vector<std::string> matching_schemas;
+  for (const googlesql::Catalog* subcat : subcatalogs) {
+    if (subcat == nullptr) continue;
+    std::string schema_name = subcat->FullName();
+    if (schema_name.empty() ||
+        absl::EqualsIgnoreCase(schema_name, "pg_catalog") ||
+        absl::EqualsIgnoreCase(schema_name, "information_schema") ||
+        absl::EqualsIgnoreCase(schema_name, "pg_information_schema") ||
+        absl::EqualsIgnoreCase(schema_name, "spanner_sys")) {
+      continue;
+    }
+    const googlesql::Function* func = nullptr;
+    if (user_catalog->FindFunction({schema_name, func_name}, &func).ok() &&
+        func != nullptr) {
+      matching_schemas.push_back(schema_name);
+      continue;
+    }
+    const googlesql::TableValuedFunction* tvf = nullptr;
+    if (user_catalog->FindTableValuedFunction({schema_name, func_name}, &tvf)
+            .ok() &&
+        tvf != nullptr) {
+      matching_schemas.push_back(schema_name);
+      continue;
+    }
+  }
+  if (matching_schemas.empty()) {
+    return nullptr;
+  }
+  std::sort(matching_schemas.begin(), matching_schemas.end());
+  *num_schemas = static_cast<int>(matching_schemas.size());
+  char** result =
+      reinterpret_cast<char**>(palloc(sizeof(char*) * matching_schemas.size()));
+  for (size_t i = 0; i < matching_schemas.size(); ++i) {
+    result[i] = pstrdup(matching_schemas[i].c_str());
+  }
+  return result;
+}
+
+bool IsSearchPathFeatureEnabledC() {
+  return false;
+}
+

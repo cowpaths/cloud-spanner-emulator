@@ -201,3 +201,14 @@ RangeTblEntry* AddRangeTableEntryByOidC(ParseState* pstate, Oid relation_oid,
                                         Alias* alias, bool inh, bool inFromCl) {
   abort();
 }
+
+char** FindCandidateSchemasForUnqualifiedFunctionC(const char* func_name,
+                                                   int* num_schemas) {
+  *num_schemas = 0;
+  return nullptr;
+}
+
+bool IsSearchPathFeatureEnabledC() {
+  return false;
+}
+

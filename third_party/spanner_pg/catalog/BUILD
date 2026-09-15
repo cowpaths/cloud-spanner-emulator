@@ -820,6 +820,7 @@ cc_library(
         "//third_party/spanner_pg/src/backend/catalog:generated_catalog_headers",
         "//third_party/spanner_pg/transformer",
         "//third_party/spanner_pg/util:pg_list_iterators",
+        "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",

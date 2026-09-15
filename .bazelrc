@@ -15,6 +15,10 @@ build --python_version=PY3
 build --incompatible_use_python_toolchains=false
 build --action_env=PYTHON_BIN=/usr/bin/python3
 
+# Prevent ld.gold AArch64 internal crash on Cortex-A53 erratum 843419 (PR gold/21868)
+build --linkopt=-Wl,--no-fix-cortex-a53-843419
+build --host_linkopt=-Wl,--no-fix-cortex-a53-843419
+
 # =============================================================================
 # 2. COMPILER COMPATIBILITY (GCC 11+ FIXES)
 # =============================================================================

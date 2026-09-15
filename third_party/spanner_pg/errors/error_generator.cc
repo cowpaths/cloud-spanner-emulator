@@ -123,7 +123,7 @@ class ParamTypes {
   // This must be done before calling any other method that looks up
   // metadata about a type.
   // Returns true if "type_name" exists and false otherwise.
-  bool ABSL_MUST_USE_RESULT Require(const std::string& type_name) {
+  [[nodiscard]] bool Require(const std::string& type_name) {
     if (types_.count(type_name) > 0) return true;
 
     bool found = false;

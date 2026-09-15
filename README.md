@@ -253,6 +253,8 @@ Notable limitations:
   - `TOKENIZE_NGRAMS` accepts `remove_diacritics` parameter but takes no action
     on it.
   - `CREATE SEARCH INDEX` accepts `OPTIONS` clause but takes no action on it.
+  - `ALTER DATABASE` accepts `score_version` option (and `spanner.score_version`
+    in PostgreSQL dialect) but takes no action on it.
 
 ## Frequently Asked Questions (FAQ)
 

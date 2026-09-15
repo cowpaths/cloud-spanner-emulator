@@ -15,10 +15,12 @@
 //
 
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
 
 #include "absl/flags/parse.h"
 #include "googlesql/base/logging.h"
+#include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "common/config.h"
 #include "frontend/server/server.h"
@@ -28,6 +30,7 @@ using Server = ::google::spanner::emulator::frontend::Server;
 int main(int argc, char** argv) {
   // Start the emulator gRPC server.
   absl::ParseCommandLine(argc, argv);
+
   Server::Options options;
   options.server_address = google::spanner::emulator::config::grpc_host_port();
   std::unique_ptr<Server> server = Server::Create(options);
