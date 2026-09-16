@@ -99,9 +99,11 @@ absl::StatusOr<PersistedStorage> SnapshotWriter::SerializeStorage(
     // Build list of column names and IDs for this table.
     std::vector<std::string> column_names;
     std::vector<ColumnID> column_ids;
+    std::vector<const Column*> columns;
     for (const auto* col : table->columns()) {
       column_names.push_back(col->Name());
       column_ids.push_back(col->id());
+      columns.push_back(col);
     }
 
     // Read all rows from this table.
@@ -140,7 +142,12 @@ absl::StatusOr<PersistedStorage> SnapshotWriter::SerializeStorage(
       }
 
       // Serialize all column values (including key columns, for simplicity).
+      // Generated columns are recomputed on restore rather than written, so
+      // there's no point persisting their values here.
       for (int i = 0; i < static_cast<int>(column_ids.size()); ++i) {
+        if (columns[i]->is_generated()) {
+          continue;
+        }
         zetasql::Value val = cursor->ColumnValue(i);
         if (!val.is_valid()) {
           // Skip invalid/unset values.

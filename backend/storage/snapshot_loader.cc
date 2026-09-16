@@ -119,6 +119,14 @@ absl::Status PopulateStorage(
         }
         const Column* col = it->second;
 
+        // Generated column values (key or non-key) are recomputed by the
+        // write path from their dependent columns on insert, so supplying
+        // them here would trip ValidateGeneratedColumnsNotPresent, which
+        // rejects any generated column present on a non-kUpdate op.
+        if (col->is_generated()) {
+          continue;
+        }
+
         // Use the latest version of the value.
         if (cell_proto.versions_size() == 0) {
           continue;

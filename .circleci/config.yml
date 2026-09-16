@@ -11,7 +11,7 @@ executors:
     resource_class: arm.xlarge
   macos:
     macos:
-      xcode: "26.4.0"
+      xcode: "27.0"
     resource_class: m4pro.large
 
 commands:
@@ -73,6 +73,7 @@ commands:
           name: Install gcloud CLI
           command: |
             if [[ "$(uname)" == "Darwin" ]]; then
+              brew update
               brew install --cask google-cloud-sdk
             else
               sudo apt-get update && sudo apt-get install -y apt-transport-https ca-certificates gnupg curl

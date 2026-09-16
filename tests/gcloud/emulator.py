@@ -45,7 +45,7 @@ class TestCase(unittest.TestCase):
     """Runs gcloud with the given args and returns the output."""
     # Run gcloud with a temporary config dir so it does not mess up the default
     # config when run locally.
-    env = {}
+    env = os.environ.copy()
     if os.environ.get('TEST_UNDECLARED_OUTPUTS_DIR'):
       env['CLOUDSDK_CONFIG'] = os.path.join(
           os.environ.get('TEST_UNDECLARED_OUTPUTS_DIR'), '.config', 'gcloud')
