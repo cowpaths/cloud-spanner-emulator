@@ -119,11 +119,11 @@ absl::Status PopulateStorage(
         }
         const Column* col = it->second;
 
-        // Non-key generated column values are recomputed by the write path
-        // on insert, so supplying them here would trip
-        // ValidateGeneratedColumnsNotPresent. Key generated columns must
-        // still be supplied, since the engine can't derive the key.
-        if (col->is_generated() && table->FindKeyColumn(col->Name()) == nullptr) {
+        // Generated column values (key or non-key) are recomputed by the
+        // write path from their dependent columns on insert, so supplying
+        // them here would trip ValidateGeneratedColumnsNotPresent, which
+        // rejects any generated column present on a non-kUpdate op.
+        if (col->is_generated()) {
           continue;
         }
 
