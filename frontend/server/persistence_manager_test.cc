@@ -224,6 +224,98 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTrip) {
 }
 
 // ---------------------------------------------------------------------------
+// Test: Snapshot round-trip with a generated column
+//
+// Regression test: restoring a snapshot must not attempt to write a value
+// into a non-key generated column, since that is rejected by
+// ValidateGeneratedColumnsNotPresent on insert.
+// ---------------------------------------------------------------------------
+TEST_F(PersistenceManagerTest, SnapshotRoundTripGeneratedColumn) {
+  std::string snapshot_path = test_dir_ + "/snapshot.pb";
+
+  auto src_env = std::make_unique<ServerEnv>();
+  ZETASQL_ASSERT_OK(
+      src_env->instance_manager()
+          ->CreateInstance(kInstanceUri, MakeInstanceProto())
+          .status());
+
+  backend::SchemaChangeOperation schema_op;
+  schema_op.statements = {
+      R"(CREATE TABLE GenTable (
+           key INT64 NOT NULL,
+           value INT64,
+           computed INT64 NOT NULL AS (key + value) STORED
+         ) PRIMARY KEY(key))"};
+  schema_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
+  ZETASQL_ASSERT_OK_AND_ASSIGN(
+      auto src_db,
+      src_env->database_manager()->CreateDatabase(kDatabaseUri, schema_op,
+                                                   nullptr));
+
+  // Insert rows, supplying only the non-generated columns. `computed` is
+  // derived by the engine.
+  {
+    backend::ReadWriteOptions rw_options;
+    backend::RetryState retry_state;
+    ZETASQL_ASSERT_OK_AND_ASSIGN(
+        auto txn, src_db->backend()->CreateReadWriteTransaction(
+                      rw_options, retry_state));
+
+    backend::Mutation mutation;
+    std::vector<std::string> columns = {"key", "value"};
+    std::vector<backend::ValueList> rows;
+    rows.push_back({zetasql::values::Int64(1), zetasql::values::Int64(10)});
+    rows.push_back({zetasql::values::Int64(2), zetasql::values::Int64(20)});
+    mutation.AddWriteOp(backend::MutationOpType::kInsert, "GenTable",
+                        std::move(columns), std::move(rows));
+    ZETASQL_ASSERT_OK(txn->Write(mutation));
+    ZETASQL_ASSERT_OK(txn->Commit());
+  }
+
+  // Write snapshot.
+  ZETASQL_ASSERT_OK(backend::SnapshotWriter::WriteSnapshot(
+      snapshot_path, src_env->instance_manager(),
+      src_env->database_manager()));
+
+  // Load snapshot into a fresh env. Before the fix, this failed with
+  // FAILED_PRECONDITION: "Cannot write into generated column
+  // `GenTable.computed`."
+  auto dst_env = std::make_unique<ServerEnv>();
+  ZETASQL_ASSERT_OK(
+      backend::SnapshotLoader::LoadSnapshot(snapshot_path, dst_env.get())
+          .status());
+
+  ZETASQL_ASSERT_OK_AND_ASSIGN(
+      auto restored_db,
+      dst_env->database_manager()->GetDatabase(kDatabaseUri));
+
+  backend::ReadOnlyOptions ro_options;
+  ro_options.bound = backend::TimestampBound::kStrongRead;
+  ZETASQL_ASSERT_OK_AND_ASSIGN(
+      auto read_txn, restored_db->backend()->CreateReadOnlyTransaction(
+                         ro_options));
+
+  backend::ReadArg read_arg;
+  read_arg.table = "GenTable";
+  read_arg.key_set = backend::KeySet::All();
+  read_arg.columns = {"key", "computed"};
+
+  std::unique_ptr<backend::RowCursor> cursor;
+  ZETASQL_ASSERT_OK(read_txn->Read(read_arg, &cursor));
+
+  std::map<int64_t, int64_t> computed_by_key;
+  while (cursor->Next()) {
+    computed_by_key[cursor->ColumnValue(0).int64_value()] =
+        cursor->ColumnValue(1).int64_value();
+  }
+  ZETASQL_ASSERT_OK(cursor->Status());
+
+  EXPECT_EQ(computed_by_key.size(), 2);
+  EXPECT_EQ(computed_by_key[1], 11);
+  EXPECT_EQ(computed_by_key[2], 22);
+}
+
+// ---------------------------------------------------------------------------
 // Test 2: WAL replay for data mutations
 //
 // Write data mutations through PersistentStorage → save WAL → create fresh
