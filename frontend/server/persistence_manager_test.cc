@@ -239,13 +239,14 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTripGeneratedColumn) {
           ->CreateInstance(kInstanceUri, MakeInstanceProto())
           .status());
 
-  backend::SchemaChangeOperation schema_op;
-  schema_op.statements = {
+  std::vector<std::string> ddl = {
       R"(CREATE TABLE GenTable (
            key INT64 NOT NULL,
            value INT64,
            computed INT64 NOT NULL AS (key + value) STORED
          ) PRIMARY KEY(key))"};
+  backend::SchemaChangeOperation schema_op;
+  schema_op.statements = ddl;
   schema_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
   ZETASQL_ASSERT_OK_AND_ASSIGN(
       auto src_db,
