@@ -1,3 +1,8 @@
+# Retry external repository fetches (http_archive, etc.) on transient
+# failures, e.g. GitHub release downloads returning a 5xx. Applies to all
+# commands since fetches happen during the loading phase.
+common --experimental_repository_downloader_retries=5
+
 build --cxxopt=-std=c++17
 build --host_cxxopt=-std=c++17
 
