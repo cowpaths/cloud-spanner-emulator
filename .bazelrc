@@ -20,12 +20,14 @@ build --python_version=PY3
 build --incompatible_use_python_toolchains=false
 build --action_env=PYTHON_BIN=/usr/bin/python3
 
-# Prevent ld.gold AArch64 internal crash on Cortex-A53 erratum 843419 (PR gold/21868)
-build --linkopt=-Wl,--no-fix-cortex-a53-843419
-build --host_linkopt=-Wl,--no-fix-cortex-a53-843419
-
 # Automatically apply build:macos on macOS, build:linux on Linux, etc.
 build --enable_platform_specific_config
+
+# Prevent ld.gold AArch64 internal crash on Cortex-A53 erratum 843419 (PR
+# gold/21868). Linux-only: this is a GNU ld/gold flag that Apple's linker
+# doesn't understand.
+build:linux --linkopt=-Wl,--no-fix-cortex-a53-843419
+build:linux --host_linkopt=-Wl,--no-fix-cortex-a53-843419
 
 # Clang 17+ warns on ZetaSQL code; GCC doesn't recognize this flag.
 build:macos --copt   -Wno-missing-template-arg-list-after-template-kw
@@ -63,8 +65,9 @@ build --worker_max_instances=4  # Even if you have 16 CPUs, limit persistent wor
 build --worker_quit_after_build  # Clean up for Docker layers
 build --experimental_worker_memory_limit_mb=512
 
-# Use pre-built ProtoC from Ubuntu repositories to speed up Docker builds
-build --action_env=PROTOC=/usr/bin/protoc
+# Use pre-built ProtoC from Ubuntu repositories to speed up Docker builds.
+# Linux-only: this path doesn't exist on macOS.
+build:linux --action_env=PROTOC=/usr/bin/protoc
 build --proto_compiler=@com_google_protobuf//:protoc
 build --incompatible_enable_proto_toolchain_resolution=false
 

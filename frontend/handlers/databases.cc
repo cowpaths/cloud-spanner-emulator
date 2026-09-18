@@ -160,7 +160,7 @@ absl::Status CreateDatabase(RequestContext* ctx,
     for (const auto& stmt : create_statements) {
       cd->add_ddl_statements(stmt);
     }
-    ZETASQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
+    GOOGLESQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
   }
 
   // Create an operation tracking the database creation.
@@ -242,7 +242,7 @@ absl::Status UpdateDatabaseDdl(
     for (int i = 0; i < num_succesful_statements; ++i) {
       sc->add_ddl_statements(statements[i]);
     }
-    ZETASQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
+    GOOGLESQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
   }
 
   // Populate ResultSet metadata.
@@ -304,7 +304,7 @@ absl::Status DropDatabase(RequestContext* ctx,
   }
 
   // Clean up the database.
-  ZETASQL_RETURN_IF_ERROR(
+  GOOGLESQL_RETURN_IF_ERROR(
       ctx->env()->database_manager()->DeleteDatabase(request->database()));
 
   // Log the database deletion to the WAL.

@@ -177,7 +177,7 @@ absl::Status CreateInstance(RequestContext* ctx,
     instance_api::Instance inst_proto;
     instance->ToProto(&inst_proto);
     ci->set_instance_proto(inst_proto.SerializeAsString());
-    ZETASQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
+    GOOGLESQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
   }
 
   // Create an operation tracking this instance creation.

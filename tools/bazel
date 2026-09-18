@@ -5,6 +5,15 @@
 #
 # On macOS 15+, Bazel 6.x's wrapped_clang is missing LC_UUID which causes
 # dyld to reject it. This wrapper fixes that before delegating to real bazel.
+#
+# Also on macOS with Xcode 16+, every compile action implicitly depends on
+# <sdkroot>/SDKSettings.json (used by clang for API availability checks),
+# but cc_autoconf only lists SDK subdirectories (usr/include, Frameworks,
+# etc.) as builtin include directories, not the SDK root itself. That makes
+# Bazel's absolute-path-leak check reject the SDKSettings.json dependency
+# with "absolute path inclusion(s) found". This wrapper patches the
+# generated cc_toolchain's cxx_builtin_include_directories to add the SDK
+# root(s) it already references as subdirectories.
 
 set -euo pipefail
 
@@ -47,7 +56,29 @@ fix_cc_binaries() {
   echo "INFO: Fixed Bazel CC toolchain LC_UUID for macOS 15+." >&2
 }
 
-# Fix wrapped_clang LC_UUID on macOS if needed.
+patch_sdk_builtin_dirs() {
+  local output_base="$1"
+  local build_file
+
+  while IFS= read -r build_file; do
+    [[ -f "${build_file}" ]] || continue
+    grep -q "cxx_builtin_include_directories = \[" "${build_file}" 2>/dev/null || continue
+    perl -0pi -e '
+      my @sdks = ();
+      while (/"([^"]*?\.sdk)(?:\/[^"]*)?"/g) {
+        push @sdks, $1 unless grep { $_ eq $1 } @sdks;
+      }
+      for my $sdk (@sdks) {
+        my $q = qq("$sdk");
+        if (index($_, $q) == -1) {
+          s/(cxx_builtin_include_directories = \[)/$1$q,\n    /;
+        }
+      }
+    ' "${build_file}"
+  done < <(find "${output_base}/external" -maxdepth 1 -iname "*local_config_cc*" -type d 2>/dev/null | sed 's#$#/BUILD#')
+}
+
+# Fix wrapped_clang LC_UUID and SDK builtin include dirs on macOS if needed.
 if [[ "$(uname)" == "Darwin" ]]; then
   OUTPUT_BASE="$("${BAZEL_REAL}" info output_base 2>/dev/null || true)"
 
@@ -59,6 +90,7 @@ if [[ "$(uname)" == "Darwin" ]]; then
     fi
 
     fix_cc_binaries "${OUTPUT_BASE}"
+    patch_sdk_builtin_dirs "${OUTPUT_BASE}"
   fi
 fi
 

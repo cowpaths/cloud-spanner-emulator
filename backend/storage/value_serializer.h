@@ -17,10 +17,10 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_VALUE_SERIALIZER_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_VALUE_SERIALIZER_H_
 
-#include "zetasql/public/type.h"
-#include "zetasql/public/type.pb.h"
-#include "zetasql/public/value.h"
-#include "zetasql/public/value.pb.h"
+#include "googlesql/public/type.h"
+#include "googlesql/public/type.pb.h"
+#include "googlesql/public/value.h"
+#include "googlesql/public/value.pb.h"
 #include "absl/status/statusor.h"
 #include "backend/datamodel/key.h"
 #include "backend/storage/persistence.pb.h"
@@ -30,17 +30,17 @@ namespace spanner {
 namespace emulator {
 namespace backend {
 
-// Serializes a zetasql::Value to a PersistedValue proto containing both the
+// Serializes a googlesql::Value to a PersistedValue proto containing both the
 // value and its type information. Returns an error if serialization fails.
 // An invalid (default-constructed) Value is serialized as a PersistedValue with
 // empty fields.
-absl::StatusOr<PersistedValue> SerializeValue(const zetasql::Value& value);
+absl::StatusOr<PersistedValue> SerializeValue(const googlesql::Value& value);
 
-// Deserializes a zetasql::Value from a PersistedValue proto. Requires a
+// Deserializes a googlesql::Value from a PersistedValue proto. Requires a
 // TypeFactory for reconstructing the type. Returns an invalid Value if the
 // proto has empty fields.
-absl::StatusOr<zetasql::Value> DeserializeValue(
-    const PersistedValue& proto, zetasql::TypeFactory* type_factory);
+absl::StatusOr<googlesql::Value> DeserializeValue(
+    const PersistedValue& proto, googlesql::TypeFactory* type_factory);
 
 // Serializes a Key to a PersistedKey proto.
 PersistedKey SerializeKey(const Key& key);
@@ -48,7 +48,7 @@ PersistedKey SerializeKey(const Key& key);
 // Deserializes a Key from a PersistedKey proto. Requires a TypeFactory for
 // reconstructing column values.
 absl::StatusOr<Key> DeserializeKey(const PersistedKey& proto,
-                                   zetasql::TypeFactory* type_factory);
+                                   googlesql::TypeFactory* type_factory);
 
 }  // namespace backend
 }  // namespace emulator

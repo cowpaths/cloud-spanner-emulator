@@ -71,7 +71,7 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
   database->clock_ = clock;
   database->database_id_ = database_id;
   if (wal_writer) {
-    ZETASQL_ASSIGN_OR_RETURN(
+    GOOGLESQL_ASSIGN_OR_RETURN(
         auto persistent,
         PersistentStorage::Create(database_uri, std::move(wal_writer)));
     database->storage_ = std::move(persistent);
