@@ -46,12 +46,12 @@ cc_library(
         "//common:feature_flags",
         "//common:limits",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
-        "@com_google_zetasql//zetasql/base:no_destructor",
     ],
 )
 
@@ -69,9 +69,9 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_googlesql//googlesql/base/testing:status_matchers",
         "@com_google_googletest//:gtest_main",
         "@com_google_protobuf//:protobuf",
-        "@com_google_zetasql//zetasql/base/testing:status_matchers",
     ],
 )
 
@@ -96,7 +96,7 @@ cc_binary(
         ":ddl_reserved_words",
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/strings",
-        "@com_google_zetasql//zetasql/base",
+        "@com_google_googlesql//googlesql/base",
     ],
 )
 
@@ -126,7 +126,7 @@ generate_javacc_parser(
         "ddl_parser.jjt",
     ],
     extra_deps = [
-        "@com_google_zetasql//zetasql/public:strings",
+        "@com_google_googlesql//googlesql/public:strings",
     ],
     extra_headers = [
         "ddl_char_stream.h",

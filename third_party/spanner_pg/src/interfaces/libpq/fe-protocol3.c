@@ -3,7 +3,7 @@
  * fe-protocol3.c
  *	  functions that are specific to frontend/backend protocol version 3
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -16,16 +16,16 @@
 
 #include <ctype.h>
 #include <fcntl.h>
+#include <limits.h>
 
 #ifdef WIN32
 #include "win32.h"
 #else
 #include <unistd.h>
-#ifdef HAVE_NETINET_TCP_H
 #include <netinet/tcp.h>
 #endif
-#endif
 
+#include "common/int.h"
 #include "libpq-fe.h"
 #include "libpq-int.h"
 #include "mb/pg_wchar.h"
@@ -50,8 +50,8 @@ static int	getCopyStart(PGconn *conn, ExecStatusType copytype);
 static int	getReadyForQuery(PGconn *conn);
 static void reportErrorPosition(PQExpBuffer msg, const char *query,
 								int loc, int encoding);
-static int	build_startup_packet(const PGconn *conn, char *packet,
-								 const PQEnvironmentOption *options);
+static size_t build_startup_packet(const PGconn *conn, char *packet,
+								   const PQEnvironmentOption *options);
 
 
 /*
@@ -203,8 +203,7 @@ pqParseInput3(PGconn *conn)
 														   PGRES_COMMAND_OK);
 						if (!conn->result)
 						{
-							appendPQExpBufferStr(&conn->errorMessage,
-												 libpq_gettext("out of memory"));
+							libpq_append_conn_error(conn, "out of memory");
 							pqSaveErrorResult(conn);
 						}
 					}
@@ -228,8 +227,7 @@ pqParseInput3(PGconn *conn)
 														   PGRES_PIPELINE_SYNC);
 						if (!conn->result)
 						{
-							appendPQExpBufferStr(&conn->errorMessage,
-												 libpq_gettext("out of memory"));
+							libpq_append_conn_error(conn, "out of memory");
 							pqSaveErrorResult(conn);
 						}
 						else
@@ -252,8 +250,7 @@ pqParseInput3(PGconn *conn)
 														   PGRES_EMPTY_QUERY);
 						if (!conn->result)
 						{
-							appendPQExpBufferStr(&conn->errorMessage,
-												 libpq_gettext("out of memory"));
+							libpq_append_conn_error(conn, "out of memory");
 							pqSaveErrorResult(conn);
 						}
 					}
@@ -270,8 +267,7 @@ pqParseInput3(PGconn *conn)
 															   PGRES_COMMAND_OK);
 							if (!conn->result)
 							{
-								appendPQExpBufferStr(&conn->errorMessage,
-													 libpq_gettext("out of memory"));
+								libpq_append_conn_error(conn, "out of memory");
 								pqSaveErrorResult(conn);
 							}
 						}
@@ -351,8 +347,7 @@ pqParseInput3(PGconn *conn)
 															   PGRES_COMMAND_OK);
 							if (!conn->result)
 							{
-								appendPQExpBufferStr(&conn->errorMessage,
-													 libpq_gettext("out of memory"));
+								libpq_append_conn_error(conn, "out of memory");
 								pqSaveErrorResult(conn);
 							}
 						}
@@ -384,8 +379,7 @@ pqParseInput3(PGconn *conn)
 					else
 					{
 						/* Set up to report error at end of query */
-						appendPQExpBufferStr(&conn->errorMessage,
-											 libpq_gettext("server sent data (\"D\" message) without prior row description (\"T\" message)\n"));
+						libpq_append_conn_error(conn, "server sent data (\"D\" message) without prior row description (\"T\" message)");
 						pqSaveErrorResult(conn);
 						/* Discard the unexpected message */
 						conn->inCursor += msgLength;
@@ -427,9 +421,7 @@ pqParseInput3(PGconn *conn)
 					 */
 					break;
 				default:
-					appendPQExpBuffer(&conn->errorMessage,
-									  libpq_gettext("unexpected response from server; first received character was \"%c\"\n"),
-									  id);
+					libpq_append_conn_error(conn, "unexpected response from server; first received character was \"%c\"", id);
 					/* build an error result holding the error message */
 					pqSaveErrorResult(conn);
 					/* not sure if we will see more, so go to ready state */
@@ -452,9 +444,7 @@ pqParseInput3(PGconn *conn)
 		else
 		{
 			/* Trouble --- report it */
-			appendPQExpBuffer(&conn->errorMessage,
-							  libpq_gettext("message contents do not agree with length in message type \"%c\"\n"),
-							  id);
+			libpq_append_conn_error(conn, "message contents do not agree with length in message type \"%c\"", id);
 			/* build an error result holding the error message */
 			pqSaveErrorResult(conn);
 			conn->asyncStatus = PGASYNC_READY;
@@ -472,9 +462,8 @@ pqParseInput3(PGconn *conn)
 static void
 handleSyncLoss(PGconn *conn, char id, int msgLength)
 {
-	appendPQExpBuffer(&conn->errorMessage,
-					  libpq_gettext("lost synchronization with server: got message type \"%c\", length %d\n"),
-					  id, msgLength);
+	libpq_append_conn_error(conn, "lost synchronization with server: got message type \"%c\", length %d",
+							id, msgLength);
 	/* build an error result holding the error message */
 	pqSaveErrorResult(conn);
 	conn->asyncStatus = PGASYNC_READY;	/* drop out of PQgetResult wait loop */
@@ -964,8 +953,7 @@ pqGetErrorNotice3(PGconn *conn, bool isError)
 		}
 
 		if (PQExpBufferDataBroken(workBuf))
-			appendPQExpBufferStr(&conn->errorMessage,
-								 libpq_gettext("out of memory\n"));
+			libpq_append_conn_error(conn, "out of memory");
 		else
 			appendPQExpBufferStr(&conn->errorMessage, workBuf.data);
 	}
@@ -1212,8 +1200,21 @@ reportErrorPosition(PQExpBuffer msg, const char *query, int loc, int encoding)
 	 * scridx[] respectively.
 	 */
 
-	/* we need a safe allocation size... */
+	/*
+	 * We need a safe allocation size.
+	 *
+	 * The only caller of reportErrorPosition() is pqBuildErrorMessage3(); it
+	 * gets its query from either a PQresultErrorField() or a PGcmdQueueEntry,
+	 * both of which must have fit into conn->inBuffer/outBuffer. So slen fits
+	 * inside an int, but we can't assume that (slen * sizeof(int)) fits
+	 * inside a size_t.
+	 */
 	slen = strlen(wquery) + 1;
+	if (slen > SIZE_MAX / sizeof(int))
+	{
+		free(wquery);
+		return;
+	}
 
 	qidx = (int *) malloc(slen * sizeof(int));
 	if (qidx == NULL)
@@ -1395,6 +1396,62 @@ reportErrorPosition(PQExpBuffer msg, const char *query, int loc, int encoding)
 
 
 /*
+ * Attempt to read a NegotiateProtocolVersion message.
+ * Entry: 'v' message type and length have already been consumed.
+ * Exit: returns 0 if successfully consumed message.
+ *		 returns EOF if not enough data.
+ */
+int
+pqGetNegotiateProtocolVersion3(PGconn *conn)
+{
+	int			tmp;
+	ProtocolVersion their_version;
+	int			num;
+	PQExpBufferData buf;
+
+	if (pqGetInt(&tmp, 4, conn) != 0)
+		return EOF;
+	their_version = tmp;
+
+	if (pqGetInt(&num, 4, conn) != 0)
+		return EOF;
+
+	initPQExpBuffer(&buf);
+	for (int i = 0; i < num; i++)
+	{
+		if (pqGets(&conn->workBuffer, conn))
+		{
+			termPQExpBuffer(&buf);
+			return EOF;
+		}
+		if (buf.len > 0)
+			appendPQExpBufferChar(&buf, ' ');
+		appendPQExpBufferStr(&buf, conn->workBuffer.data);
+	}
+
+	if (their_version < conn->pversion)
+		libpq_append_conn_error(conn, "protocol version not supported by server: client uses %u.%u, server supports up to %u.%u",
+								PG_PROTOCOL_MAJOR(conn->pversion), PG_PROTOCOL_MINOR(conn->pversion),
+								PG_PROTOCOL_MAJOR(their_version), PG_PROTOCOL_MINOR(their_version));
+	if (num > 0)
+	{
+		appendPQExpBuffer(&conn->errorMessage,
+						  libpq_ngettext("protocol extension not supported by server: %s",
+										 "protocol extensions not supported by server: %s", num),
+						  buf.data);
+		appendPQExpBufferChar(&conn->errorMessage, '\n');
+	}
+
+	/* neither -- server shouldn't have sent it */
+	if (!(their_version < conn->pversion) && !(num > 0))
+		libpq_append_conn_error(conn, "invalid %s message", "NegotiateProtocolVersion");
+
+	termPQExpBuffer(&buf);
+	return 0;
+}
+
+
+/*
  * Attempt to read a ParameterStatus message.
  * This is possible in several places, so we break it out as a subroutine.
  * Entry: 'S' message type and length have already been consumed.
@@ -1454,7 +1511,7 @@ getNotify(PGconn *conn)
 	}
 
 	/*
-	 * Store the strings right after the PQnotify structure so it can all be
+	 * Store the strings right after the PGnotify structure so it can all be
 	 * freed at once.  We don't use NAMEDATALEN because we don't want to tie
 	 * this interface to a specific server name length.
 	 */
@@ -1720,8 +1777,7 @@ pqGetCopyData3(PGconn *conn, char **buffer, int async)
 			*buffer = (char *) malloc(msgLength + 1);
 			if (*buffer == NULL)
 			{
-				appendPQExpBufferStr(&conn->errorMessage,
-									 libpq_gettext("out of memory\n"));
+				libpq_append_conn_error(conn, "out of memory");
 				return -2;
 			}
 			memcpy(*buffer, &conn->inBuffer[conn->inCursor], msgLength);
@@ -1753,8 +1809,7 @@ pqGetline3(PGconn *conn, char *s, int maxlen)
 		 conn->asyncStatus != PGASYNC_COPY_BOTH) ||
 		conn->copy_is_binary)
 	{
-		appendPQExpBufferStr(&conn->errorMessage,
-							 libpq_gettext("PQgetline: not doing text COPY OUT\n"));
+		libpq_append_conn_error(conn, "PQgetline: not doing text COPY OUT");
 		*s = '\0';
 		return EOF;
 	}
@@ -1859,8 +1914,7 @@ pqEndcopy3(PGconn *conn)
 		conn->asyncStatus != PGASYNC_COPY_OUT &&
 		conn->asyncStatus != PGASYNC_COPY_BOTH)
 	{
-		appendPQExpBufferStr(&conn->errorMessage,
-							 libpq_gettext("no COPY in progress\n"));
+		libpq_append_conn_error(conn, "no COPY in progress");
 		return 1;
 	}
 
@@ -1946,7 +2000,7 @@ pqEndcopy3(PGconn *conn)
  */
 PGresult *
 pqFunctionCall3(PGconn *conn, Oid fnid,
-				int *result_buf, int *actual_result_len,
+				int *result_buf, int buf_size, int *actual_result_len,
 				int result_is_int,
 				const PQArgBlock *args, int nargs)
 {
@@ -2080,6 +2134,17 @@ pqFunctionCall3(PGconn *conn, Oid fnid,
 					}
 					else
 					{
+						/*
+						 * If the server returned too much data for the
+						 * buffer, something fishy is going on.  Abandon ship.
+						 */
+						if (buf_size != -1 && *actual_result_len > buf_size)
+						{
+							libpq_append_conn_error(conn, "server returned too much data");
+							handleSyncLoss(conn, id, *actual_result_len);
+							return pqPrepareAsyncResult(conn);
+						}
+
 						if (pqGetnchar((char *) result_buf,
 									   *actual_result_len,
 									   conn))
@@ -2123,15 +2188,13 @@ pqFunctionCall3(PGconn *conn, Oid fnid,
 						conn->result = PQmakeEmptyPGresult(conn, status);
 						if (!conn->result)
 						{
-							appendPQExpBufferStr(&conn->errorMessage,
-												 libpq_gettext("out of memory\n"));
+							libpq_append_conn_error(conn, "out of memory");
 							pqSaveErrorResult(conn);
 						}
 					}
 					else
 					{
-						appendPQExpBufferStr(&conn->errorMessage,
-											 libpq_gettext("protocol error: no function result\n"));
+						libpq_append_conn_error(conn, "protocol error: no function result");
 						pqSaveErrorResult(conn);
 					}
 				}
@@ -2142,9 +2205,7 @@ pqFunctionCall3(PGconn *conn, Oid fnid,
 				break;
 			default:
 				/* The backend violates the protocol. */
-				appendPQExpBuffer(&conn->errorMessage,
-								  libpq_gettext("protocol error: id=0x%x\n"),
-								  id);
+				libpq_append_conn_error(conn, "protocol error: id=0x%x", id);
 				pqSaveErrorResult(conn);
 				/* trust the specified message length as what to skip */
 				conn->inStart += 5 + msgLength;
@@ -2181,12 +2242,20 @@ pqBuildStartupPacket3(PGconn *conn, int *packetlen,
 					  const PQEnvironmentOption *options)
 {
 	char	   *startpacket;
+	size_t		len;
 
-	*packetlen = build_startup_packet(conn, NULL, options);
+	len = build_startup_packet(conn, NULL, options);
+	if (len == 0 || len > INT_MAX)
+		return NULL;
+
+	*packetlen = len;
 	startpacket = (char *) malloc(*packetlen);
 	if (!startpacket)
 		return NULL;
-	*packetlen = build_startup_packet(conn, startpacket, options);
+
+	len = build_startup_packet(conn, startpacket, options);
+	Assert(*packetlen == len);
+
 	return startpacket;
 }
 
@@ -2197,13 +2266,13 @@ pqBuildStartupPacket3(PGconn *conn, int *packetlen,
  * To avoid duplicate logic, this routine is called twice: the first time
  * (with packet == NULL) just counts the space needed, the second time
  * (with packet == allocated space) fills it in.  Return value is the number
- * of bytes used.
+ * of bytes used, or zero in the unlikely event of size_t overflow.
  */
-static int
+static size_t
 build_startup_packet(const PGconn *conn, char *packet,
 					 const PQEnvironmentOption *options)
 {
-	int			packet_len = 0;
+	size_t		packet_len = 0;
 	const PQEnvironmentOption *next_eo;
 	const char *val;
 
@@ -2222,10 +2291,12 @@ build_startup_packet(const PGconn *conn, char *packet,
 	do { \
 		if (packet) \
 			strcpy(packet + packet_len, optname); \
-		packet_len += strlen(optname) + 1; \
+		if (pg_add_size_overflow(packet_len, strlen(optname) + 1, &packet_len)) \
+			return 0; \
 		if (packet) \
 			strcpy(packet + packet_len, optval); \
-		packet_len += strlen(optval) + 1; \
+		if (pg_add_size_overflow(packet_len, strlen(optval) + 1, &packet_len)) \
+			return 0; \
 	} while(0)
 
 	if (conn->pguser && conn->pguser[0])
@@ -2260,7 +2331,8 @@ build_startup_packet(const PGconn *conn, char *packet,
 	/* Add trailing terminator */
 	if (packet)
 		packet[packet_len] = '\0';
-	packet_len++;
+	if (pg_add_size_overflow(packet_len, 1, &packet_len))
+		return 0;
 
 	return packet_len;
 }

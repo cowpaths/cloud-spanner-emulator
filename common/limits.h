@@ -40,7 +40,7 @@ constexpr int64_t kMaxGRPCErrorMessageLength = 1024;
 constexpr int kMaxTransactionsPerSession = 32;
 
 // Maximum number of tables per database.
-constexpr int kMaxTablesPerDatabase = 2560;
+constexpr int kMaxTablesPerDatabase = 5000;
 
 // Maximum number of change streams per database.
 //   https://cloud.google.com/spanner/quotas#change-streams
@@ -71,6 +71,10 @@ constexpr int64_t kChangeStreamsMaxHeartbeatMilliseconds = 300000;
 // Maximum duration in minutes supported for change stream query to read into
 // the future
 constexpr int kChangeStreamsMaxStartTimestampDelay = 10;
+
+// Maximum duration in minutes supported for change stream query to read into
+// the future for mutable key range change streams.
+constexpr int kChangeStreamsMaxEndTimestampDelay = 30;
 
 // Maximum number of change streams per column.
 constexpr int kMaxChangeStreamsTrackingATableOrColumn = 3;

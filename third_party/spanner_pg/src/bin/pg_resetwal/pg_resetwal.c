@@ -20,7 +20,7 @@
  * step 2 ...
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/bin/pg_resetwal/pg_resetwal.c
@@ -69,9 +69,11 @@ static TransactionId set_xid = 0;
 static TransactionId set_oldest_commit_ts_xid = 0;
 static TransactionId set_newest_commit_ts_xid = 0;
 static Oid	set_oid = 0;
+static bool mxid_given = false;
 static MultiXactId set_mxid = 0;
-static MultiXactOffset set_mxoff = (MultiXactOffset) -1;
-static uint32 minXlogTli = 0;
+static bool mxoff_given = false;
+static MultiXactOffset set_mxoff = 0;
+static TimeLineID minXlogTli = 0;
 static XLogSegNo minXlogSegNo = 0;
 static int	WalSegSz;
 static int	set_wal_segsize;
@@ -114,6 +116,7 @@ main(int argc, char *argv[])
 	MultiXactId set_oldestmxid = 0;
 	char	   *endptr;
 	char	   *endptr2;
+	int64		tmpi64;
 	char	   *DataDir = NULL;
 	char	   *log_fname = NULL;
 	int			fd;
@@ -250,8 +253,6 @@ main(int argc, char *argv[])
 					pg_log_error_hint("Try \"%s --help\" for more information.", progname);
 					exit(1);
 				}
-				if (set_mxid == 0)
-					pg_fatal("multitransaction ID (-m) must not be 0");
 
 				/*
 				 * XXX It'd be nice to have more sanity checks here, e.g. so
@@ -259,19 +260,23 @@ main(int argc, char *argv[])
 				 */
 				if (set_oldestmxid == 0)
 					pg_fatal("oldest multitransaction ID (-m) must not be 0");
+				mxid_given = true;
 				break;
 
 			case 'O':
 				errno = 0;
-				set_mxoff = strtoul(optarg, &endptr, 0);
+				tmpi64 = strtoi64(optarg, &endptr, 0);
 				if (endptr == optarg || *endptr != '\0' || errno != 0)
 				{
 					pg_log_error("invalid argument for option %s", "-O");
 					pg_log_error_hint("Try \"%s --help\" for more information.", progname);
 					exit(1);
 				}
-				if (set_mxoff == -1)
-					pg_fatal("multitransaction offset (-O) must not be -1");
+				if (tmpi64 < 0 || tmpi64 > (int64) MaxMultiXactOffset)
+					pg_fatal("multitransaction offset (-O) must be between 0 and %u", MaxMultiXactOffset);
+
+				set_mxoff = (MultiXactOffset) tmpi64;
+				mxoff_given = true;
 				break;
 
 			case 'l':
@@ -295,7 +300,7 @@ main(int argc, char *argv[])
 				if (endptr == optarg || *endptr != '\0' || errno != 0)
 					pg_fatal("argument of --wal-segsize must be a number");
 				if (!IsValidWalSegSize(set_wal_segsize))
-					pg_fatal("argument of --wal-segsize must be a power of 2 between 1 and 1024");
+					pg_fatal("argument of --wal-segsize must be a power of two between 1 and 1024");
 				break;
 
 			default:
@@ -430,7 +435,7 @@ main(int argc, char *argv[])
 	if (set_oid != 0)
 		ControlFile.checkPointCopy.nextOid = set_oid;
 
-	if (set_mxid != 0)
+	if (mxid_given)
 	{
 		ControlFile.checkPointCopy.nextMulti = set_mxid;
 
@@ -440,7 +445,7 @@ main(int argc, char *argv[])
 		ControlFile.checkPointCopy.oldestMultiDB = InvalidOid;
 	}
 
-	if (set_mxoff != -1)
+	if (mxoff_given)
 		ControlFile.checkPointCopy.nextMultiOffset = set_mxoff;
 
 	if (minXlogTli > ControlFile.checkPointCopy.ThisTimeLineID)
@@ -790,7 +795,7 @@ PrintNewControlValues(void)
 				 newXlogSegNo, WalSegSz);
 	printf(_("First log segment after reset:        %s\n"), fname);
 
-	if (set_mxid != 0)
+	if (mxid_given)
 	{
 		printf(_("NextMultiXactId:                      %u\n"),
 			   ControlFile.checkPointCopy.nextMulti);
@@ -800,7 +805,7 @@ PrintNewControlValues(void)
 			   ControlFile.checkPointCopy.oldestMultiDB);
 	}
 
-	if (set_mxoff != -1)
+	if (mxoff_given)
 	{
 		printf(_("NextMultiOffset:                      %u\n"),
 			   ControlFile.checkPointCopy.nextMultiOffset);
@@ -816,6 +821,10 @@ PrintNewControlValues(void)
 	{
 		printf(_("NextXID:                              %u\n"),
 			   XidFromFullTransactionId(ControlFile.checkPointCopy.nextXid));
+	}
+
+	if (set_oldest_xid != 0)
+	{
 		printf(_("OldestXID:                            %u\n"),
 			   ControlFile.checkPointCopy.oldestXid);
 		printf(_("OldestXID's DB:                       %u\n"),
@@ -901,7 +910,6 @@ FindEndOfXLOG(void)
 {
 	DIR		   *xldir;
 	struct dirent *xlde;
-	uint64		segs_per_xlogid;
 	uint64		xlogbytepos;
 
 	/*
@@ -909,8 +917,8 @@ FindEndOfXLOG(void)
 	 * old pg_control.  Note that for the moment we are working with segment
 	 * numbering according to the old xlog seg size.
 	 */
-	segs_per_xlogid = (UINT64CONST(0x0000000100000000) / ControlFile.xlog_seg_size);
-	newXlogSegNo = ControlFile.checkPointCopy.redo / ControlFile.xlog_seg_size;
+	XLByteToSeg(ControlFile.checkPointCopy.redo, newXlogSegNo,
+				ControlFile.xlog_seg_size);
 
 	/*
 	 * Scan the pg_wal directory to find existing WAL segment files. We assume
@@ -926,18 +934,12 @@ FindEndOfXLOG(void)
 		if (IsXLogFileName(xlde->d_name) ||
 			IsPartialXLogFileName(xlde->d_name))
 		{
-			unsigned int tli,
-						log,
-						seg;
+			TimeLineID	tli;
 			XLogSegNo	segno;
 
-			/*
-			 * Note: We don't use XLogFromFileName here, because we want to
-			 * use the segment size from the control file, not the size the
-			 * pg_resetwal binary was compiled with
-			 */
-			sscanf(xlde->d_name, "%08X%08X%08X", &tli, &log, &seg);
-			segno = ((uint64) log) * segs_per_xlogid + seg;
+			/* Use the segment size from the control file */
+			XLogFromFileName(xlde->d_name, &tli, &segno,
+							 ControlFile.xlog_seg_size);
 
 			/*
 			 * Note: we take the max of all files found, regardless of their

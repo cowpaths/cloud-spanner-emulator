@@ -23,11 +23,11 @@
 #include <string>
 #include <vector>
 
-#include "zetasql/public/value.h"
-#include "zetasql/resolved_ast/resolved_ast.h"
-#include "zetasql/resolved_ast/resolved_ast_visitor.h"
-#include "zetasql/resolved_ast/resolved_node.h"
-#include "zetasql/resolved_ast/resolved_node_kind.pb.h"
+#include "googlesql/public/value.h"
+#include "googlesql/resolved_ast/resolved_ast.h"
+#include "googlesql/resolved_ast/resolved_ast_visitor.h"
+#include "googlesql/resolved_ast/resolved_node.h"
+#include "googlesql/resolved_ast/resolved_node_kind.pb.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -35,6 +35,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/strip.h"
 #include "absl/time/time.h"
+#include "backend/schema/catalog/change_stream.h"
 #include "backend/schema/catalog/schema.h"
 #include "common/constants.h"
 
@@ -45,12 +46,13 @@ namespace backend {
 
 // Detect if a query statement is a change stream tvf query, and validate the
 // arguments and syntax.
-class ChangeStreamQueryValidator : public zetasql::ResolvedASTVisitor {
+class ChangeStreamQueryValidator : public googlesql::ResolvedASTVisitor {
  public:
   struct ChangeStreamMetadata {
     ChangeStreamMetadata() { is_change_stream_query = false; }
     ChangeStreamMetadata(absl::string_view tvf_name,
-                         std::vector<zetasql::Value>& args, bool is_pg)
+                         std::vector<googlesql::Value>& args, bool is_pg,
+                         const Schema* schema)
         : tvf_name(tvf_name), is_pg(is_pg) {
       start_timestamp = args[0].ToTime();
       end_timestamp = args[1].is_null()
@@ -61,13 +63,23 @@ class ChangeStreamQueryValidator : public zetasql::ResolvedASTVisitor {
                             : args[2].string_value();
       heartbeat_milliseconds = args[3].int64_value();
       change_stream_name =
-          absl::StripPrefix(tvf_name, is_pg ? kChangeStreamTvfJsonPrefix
-                                            : kChangeStreamTvfStructPrefix);
+          is_pg
+              ? (absl::StartsWith(tvf_name, kChangeStreamTvfProtoBytesPrefix)
+                     ? absl::StripPrefix(tvf_name,
+                                         kChangeStreamTvfProtoBytesPrefix)
+                     : absl::StripPrefix(tvf_name, kChangeStreamTvfJsonPrefix))
+              : absl::StripPrefix(tvf_name, kChangeStreamTvfStructPrefix);
       partition_table =
           absl::StrCat(kChangeStreamPartitionTablePrefix, change_stream_name);
       data_table =
           absl::StrCat(kChangeStreamDataTablePrefix, change_stream_name);
       is_change_stream_query = true;
+      const ChangeStream* change_stream =
+          schema->FindChangeStream(change_stream_name);
+      if (change_stream != nullptr &&
+          change_stream->partition_mode().has_value()) {
+        partition_mode = change_stream->partition_mode().value();
+      }
     }
 
     absl::Time start_timestamp;
@@ -79,6 +91,8 @@ class ChangeStreamQueryValidator : public zetasql::ResolvedASTVisitor {
     std::string tvf_name;
     std::string change_stream_name;
     bool is_pg;
+    std::string partition_mode =
+        std::string(kChangeStreamPartitionModeImmutableKeyRange);
     // If current query is not a change stream query, all the other fields will
     // be null and this bool is set to false. Vice versa, all the other fields
     // are assigned and this bool will be true.
@@ -86,7 +100,7 @@ class ChangeStreamQueryValidator : public zetasql::ResolvedASTVisitor {
   };
   explicit ChangeStreamQueryValidator(
       const Schema* schema, absl::Time query_start_time,
-      const absl::flat_hash_map<std::string, zetasql::Value>& params)
+      const absl::flat_hash_map<std::string, googlesql::Value>& params)
       : schema_(schema), query_start_time_(query_start_time) {
     // Change the parameters' names to lowercase because all parameter names are
     // lowercase in tvf scan.
@@ -97,8 +111,8 @@ class ChangeStreamQueryValidator : public zetasql::ResolvedASTVisitor {
     is_pg_ = schema_->dialect() == database_api::DatabaseDialect::POSTGRESQL;
   }
 
-  absl::Status DefaultVisit(const zetasql::ResolvedNode* node) override {
-    ZETASQL_RET_CHECK_EQ(node->node_kind(), zetasql::RESOLVED_QUERY_STMT)
+  absl::Status DefaultVisit(const googlesql::ResolvedNode* node) override {
+    GOOGLESQL_RET_CHECK_EQ(node->node_kind(), googlesql::RESOLVED_QUERY_STMT)
         << "input is not a query statement";
     return ChangeStreamQueryValidator::ValidateQuery(node);
   }
@@ -106,7 +120,7 @@ class ChangeStreamQueryValidator : public zetasql::ResolvedASTVisitor {
   // query, return false if it is a non-tvf regular query and return an error
   // indicating Emulator does not currently support generic table valued
   // functions if it is a generic tvf query.
-  absl::StatusOr<bool> IsChangeStreamQuery(const zetasql::ResolvedNode* node);
+  absl::StatusOr<bool> IsChangeStreamQuery(const googlesql::ResolvedNode* node);
 
   std::string tvf_name() { return tvf_name_; }
 
@@ -118,19 +132,19 @@ class ChangeStreamQueryValidator : public zetasql::ResolvedASTVisitor {
   // return Ok if query is a valid change stream tvf query.  This function will
   // only be executed if IsChangeStreamQuery returns true so we won't valid the
   // regular queries with change stream specific syntax and arguments values.
-  absl::Status ValidateQuery(const zetasql::ResolvedNode* node);
+  absl::Status ValidateQuery(const googlesql::ResolvedNode* node);
   // return Ok if the tvf scan has valid syntax and arguments values.
   absl::Status ValidateTvfScanAndExtractMetadata(
-      const zetasql::ResolvedTVFScan* tvf_scan);
+      const googlesql::ResolvedTVFScan* tvf_scan);
   // return Ok if start_timestamp and end_timestamp are in valid range
-  absl::Status ValidateTimeStamps(zetasql::Value start_time_value,
-                                  zetasql::Value end_time_value) const;
+  absl::Status ValidateTimeStamps(googlesql::Value start_time_value,
+                                  googlesql::Value end_time_value) const;
   // return Ok if heartbeat_milliseconds is in valid range
   absl::Status ValidateHeartbeatMilliseconds(
-      zetasql::Value heartbeat_value) const;
+      googlesql::Value heartbeat_value) const;
   // return Ok if read_options is null (this is an empty arguments, not
   // implemented yet in production)
-  absl::Status ValidateReadOptions(zetasql::Value read_options_value) const;
+  absl::Status ValidateReadOptions(googlesql::Value read_options_value) const;
 
   // current schema used to find the corresponding change stream and get the
   // retention period
@@ -139,7 +153,7 @@ class ChangeStreamQueryValidator : public zetasql::ResolvedASTVisitor {
   // into the future
   const absl::Time query_start_time_;
   // parameters and their values if arguments are binded with parameters
-  absl::flat_hash_map<std::string, zetasql::Value> params_;
+  absl::flat_hash_map<std::string, googlesql::Value> params_;
   // name of the tvf this validator is validating, used for outputting
   // informational error logs
   std::string tvf_name_;

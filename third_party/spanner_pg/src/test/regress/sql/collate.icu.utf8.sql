@@ -4,7 +4,7 @@
 
 /* skip test if not UTF8 server encoding or no ICU collations installed */
 SELECT getdatabaseencoding() <> 'UTF8' OR
-       (SELECT count(*) FROM pg_collation WHERE collprovider = 'i') = 0
+       (SELECT count(*) FROM pg_collation WHERE collprovider = 'i' AND collname <> 'unicode') = 0
        AS skip_test \gset
 \if :skip_test
 \quit
@@ -357,21 +357,33 @@ CREATE ROLE regress_test_role;
 CREATE SCHEMA test_schema;
 
 -- We need to do this this way to cope with varying names for encodings:
+SET client_min_messages TO WARNING;
+SET icu_validation_level = disabled;
+
 do $$
 BEGIN
   EXECUTE 'CREATE COLLATION test0 (provider = icu, locale = ' ||
-          quote_literal(current_setting('lc_collate')) || ');';
+          quote_literal((SELECT CASE WHEN datlocprovider='i' THEN daticulocale ELSE datcollate END FROM pg_database WHERE datname = current_database())) || ');';
 END
 $$;
 CREATE COLLATION test0 FROM "C"; -- fail, duplicate name
 do $$
 BEGIN
   EXECUTE 'CREATE COLLATION test1 (provider = icu, locale = ' ||
-          quote_literal(current_setting('lc_collate')) || ');';
+          quote_literal((SELECT CASE WHEN datlocprovider='i' THEN daticulocale ELSE datcollate END FROM pg_database WHERE datname = current_database())) || ');';
 END
 $$;
+
+RESET icu_validation_level;
+RESET client_min_messages;
+
 CREATE COLLATION test3 (provider = icu, lc_collate = 'en_US.utf8'); -- fail, needs "locale"
-CREATE COLLATION testx (provider = icu, locale = 'nonsense'); /* never fails with ICU */  DROP COLLATION testx;
+SET icu_validation_level = ERROR;
+CREATE COLLATION testx (provider = icu, locale = 'nonsense-nowhere'); -- fails
+CREATE COLLATION testx (provider = icu, locale = '@colStrength=primary;nonsense=yes'); -- fails
+RESET icu_validation_level;
+CREATE COLLATION testx (provider = icu, locale = '@colStrength=primary;nonsense=yes'); DROP COLLATION testx;
+CREATE COLLATION testx (provider = icu, locale = 'nonsense-nowhere'); DROP COLLATION testx;
 
 CREATE COLLATION test4 FROM nonsense;
 CREATE COLLATION test5 FROM test0;
@@ -444,14 +456,24 @@ drop type textrange_c;
 drop type textrange_en_us;
 
 
+-- standard collations
+
+SELECT * FROM collate_test2 ORDER BY b COLLATE UCS_BASIC;
+SELECT * FROM collate_test2 ORDER BY b COLLATE UNICODE;
+
+
 -- test ICU collation customization
 
 -- test the attributes handled by icu_set_collation_attributes()
 
+SET client_min_messages=WARNING;
 CREATE COLLATION testcoll_ignore_accents (provider = icu, locale = '@colStrength=primary;colCaseLevel=yes');
+RESET client_min_messages;
 SELECT 'aaá' > 'AAA' COLLATE "und-x-icu", 'aaá' < 'AAA' COLLATE testcoll_ignore_accents;
 
+SET client_min_messages=WARNING;
 CREATE COLLATION testcoll_backwards (provider = icu, locale = '@colBackwards=yes');
+RESET client_min_messages;
 SELECT 'coté' < 'côte' COLLATE "und-x-icu", 'coté' > 'côte' COLLATE testcoll_backwards;
 
 CREATE COLLATION testcoll_lower_first (provider = icu, locale = '@colCaseFirst=lower');
@@ -461,7 +483,9 @@ SELECT 'aaa' < 'AAA' COLLATE testcoll_lower_first, 'aaa' > 'AAA' COLLATE testcol
 CREATE COLLATION testcoll_shifted (provider = icu, locale = '@colAlternate=shifted');
 SELECT 'de-luge' < 'deanza' COLLATE "und-x-icu", 'de-luge' > 'deanza' COLLATE testcoll_shifted;
 
+SET client_min_messages=WARNING;
 CREATE COLLATION testcoll_numeric (provider = icu, locale = '@colNumeric=yes');
+RESET client_min_messages;
 SELECT 'A-21' > 'A-123' COLLATE "und-x-icu", 'A-21' < 'A-123' COLLATE testcoll_numeric;
 
 CREATE COLLATION testcoll_error1 (provider = icu, locale = '@colNumeric=lower');
@@ -470,6 +494,19 @@ CREATE COLLATION testcoll_error1 (provider = icu, locale = '@colNumeric=lower');
 -- (handled by ucol_open() directly) also work
 CREATE COLLATION testcoll_de_phonebook (provider = icu, locale = 'de@collation=phonebook');
 SELECT 'Goldmann' < 'Götz' COLLATE "de-x-icu", 'Goldmann' > 'Götz' COLLATE testcoll_de_phonebook;
+
+
+-- rules
+
+CREATE COLLATION testcoll_rules1 (provider = icu, locale = '', rules = '&a < g');
+CREATE TABLE test7 (a text);
+-- example from https://unicode-org.github.io/icu/userguide/collation/customization/#syntax
+INSERT INTO test7 VALUES ('Abernathy'), ('apple'), ('bird'), ('Boston'), ('Graham'), ('green');
+SELECT * FROM test7 ORDER BY a COLLATE "en-x-icu";
+SELECT * FROM test7 ORDER BY a COLLATE testcoll_rules1;
+DROP TABLE test7;
+
+CREATE COLLATION testcoll_rulesx (provider = icu, locale = '', rules = '!!wrong!!');
 
 
 -- nondeterministic collations
@@ -499,6 +536,12 @@ CREATE COLLATION case_insensitive (provider = icu, locale = '@colStrength=second
 SELECT 'abc' <= 'ABC' COLLATE case_sensitive, 'abc' >= 'ABC' COLLATE case_sensitive;
 SELECT 'abc' <= 'ABC' COLLATE case_insensitive, 'abc' >= 'ABC' COLLATE case_insensitive;
 
+-- test language tags
+CREATE COLLATION lt_insensitive (provider = icu, locale = 'en-u-ks-level1', deterministic = false);
+SELECT 'aBcD' COLLATE lt_insensitive = 'AbCd' COLLATE lt_insensitive;
+CREATE COLLATION lt_upperfirst (provider = icu, locale = 'und-u-kf-upper');
+SELECT 'Z' COLLATE lt_upperfirst < 'z' COLLATE lt_upperfirst;
+
 CREATE TABLE test1cs (x text COLLATE case_sensitive);
 CREATE TABLE test2cs (x text COLLATE case_sensitive);
 CREATE TABLE test3cs (x text COLLATE case_sensitive);
@@ -527,6 +570,109 @@ INSERT INTO test1cs VALUES ('ABC');  -- ok
 CREATE UNIQUE INDEX ON test3cs (x);  -- ok
 SELECT string_to_array('ABC,DEF,GHI' COLLATE case_sensitive, ',', 'abc');
 SELECT string_to_array('ABCDEFGHI' COLLATE case_sensitive, NULL, 'b');
+
+--
+-- A unique index under one collation does not prove uniqueness under
+-- another, so the planner must not use such a proof for any optimization.
+--
+
+-- Ensure that we do not use inner-unique join execution
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM test1cs t1, test3cs t2
+WHERE t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1, 2;
+
+SELECT * FROM test1cs t1, test3cs t2
+WHERE t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1, 2;
+
+-- Ensure that left-join is not removed
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM test3cs t1
+       LEFT JOIN test3cs t2 ON t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1;
+
+SELECT t1.* FROM test3cs t1
+       LEFT JOIN test3cs t2 ON t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1;
+
+-- Ensure that self-join is not removed
+EXPLAIN (COSTS OFF)
+SELECT * FROM test3cs t1, test3cs t2
+WHERE t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1, 2;
+
+SELECT * FROM test3cs t1, test3cs t2
+WHERE t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1, 2;
+
+-- Ensure that semijoin is not reduced to innerjoin
+EXPLAIN (COSTS OFF)
+SELECT * FROM test3cs t1
+  WHERE EXISTS (SELECT 1 FROM test3cs t2 WHERE t1.x = t2.x COLLATE case_insensitive)
+ORDER BY 1;
+
+SELECT * FROM test3cs t1
+  WHERE EXISTS (SELECT 1 FROM test3cs t2 WHERE t1.x = t2.x COLLATE case_insensitive)
+ORDER BY 1;
+
+--
+-- A DISTINCT / GROUP BY / set-op on a subquery does not prove uniqueness
+-- under a different collation, so the planner must not use such a proof for
+-- any optimization.
+--
+
+-- Ensure that we do not use inner-unique join execution
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM test1cs t1, (SELECT DISTINCT x FROM test3cs) t2
+WHERE t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1, 2;
+
+SELECT * FROM test1cs t1, (SELECT DISTINCT x FROM test3cs) t2
+WHERE t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1, 2;
+
+-- Same with GROUP BY
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM test1cs t1, (SELECT x FROM test3cs GROUP BY x) t2
+WHERE t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1, 2;
+
+SELECT * FROM test1cs t1, (SELECT x FROM test3cs GROUP BY x) t2
+WHERE t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1, 2;
+
+-- Same with set-op
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM test1cs t1, (SELECT x FROM test3cs UNION SELECT x FROM test3cs) t2
+WHERE t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1, 2;
+
+SELECT * FROM test1cs t1, (SELECT x FROM test3cs UNION SELECT x FROM test3cs) t2
+WHERE t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1, 2;
+
+-- Ensure that left-join is not removed
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM test3cs t1
+       LEFT JOIN (SELECT DISTINCT x FROM test3cs) t2 ON t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1;
+
+SELECT t1.* FROM test3cs t1
+       LEFT JOIN (SELECT DISTINCT x FROM test3cs) t2 ON t1.x = t2.x COLLATE case_insensitive
+ORDER BY 1;
+
+-- Ensure that semijoin is not reduced to innerjoin
+EXPLAIN (COSTS OFF)
+SELECT * FROM test3cs t1
+  WHERE EXISTS (SELECT 1 FROM (SELECT DISTINCT x FROM test3cs) t2
+                WHERE t1.x = t2.x COLLATE case_insensitive)
+ORDER BY 1;
+
+SELECT * FROM test3cs t1
+  WHERE EXISTS (SELECT 1 FROM (SELECT DISTINCT x FROM test3cs) t2
+                WHERE t1.x = t2.x COLLATE case_insensitive)
+ORDER BY 1;
 
 CREATE TABLE test1ci (x text COLLATE case_insensitive);
 CREATE TABLE test2ci (x text COLLATE case_insensitive);
@@ -631,7 +777,9 @@ INSERT INTO inner_text VALUES ('a', NULL);
 SELECT * FROM outer_text WHERE (f1, f2) NOT IN (SELECT * FROM inner_text);
 
 -- accents
+SET client_min_messages=WARNING;
 CREATE COLLATION ignore_accents (provider = icu, locale = '@colStrength=primary;colCaseLevel=yes', deterministic = false);
+RESET client_min_messages;
 
 CREATE TABLE test4 (a int, b text);
 INSERT INTO test4 VALUES (1, 'cote'), (2, 'côte'), (3, 'coté'), (4, 'côté');

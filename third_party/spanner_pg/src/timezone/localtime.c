@@ -17,6 +17,9 @@
 #include "c.h"
 
 #include <fcntl.h>
+/* SPANGRES BEGIN */
+#include <pthread.h>
+/* SPANGRES END */
 
 #include "datatype/timestamp.h"
 #include "pgtz.h"
@@ -82,13 +85,15 @@ struct rule
  * Prototypes for static functions.
  */
 
-static struct pg_tm *gmtsub(pg_time_t const *, int32, struct pg_tm *);
-static bool increment_overflow(int *, int);
-static bool increment_overflow_time(pg_time_t *, int32);
-static int64 leapcorr(struct state const *, pg_time_t);
-static struct pg_tm *timesub(pg_time_t const *, int32, struct state const *,
-							 struct pg_tm *);
-static bool typesequiv(struct state const *, int, int);
+static struct pg_tm *gmtsub(pg_time_t const *timep, int32 offset,
+							struct pg_tm *tmp);
+static bool increment_overflow(int *ip, int j);
+static bool increment_overflow_time(pg_time_t *tp, int32 j);
+static int64 leapcorr(struct state const *sp, pg_time_t t);
+static struct pg_tm *timesub(pg_time_t const *timep,
+							 int32 offset, struct state const *sp,
+							 struct pg_tm *tmp);
+static bool typesequiv(struct state const *sp, int a, int b);
 
 
 /*
@@ -106,6 +111,23 @@ static __thread struct pg_tm tm;
 /* GMT timezone state data is kept here */
 // Make this thread-local so each thread has its own copy.
 static __thread struct state *gmtptr = NULL;
+
+static pthread_key_t gmtptr_key;
+static pthread_once_t gmtptr_once_control = PTHREAD_ONCE_INIT;
+static int gmtptr_key_create_status = 0;
+
+static void gmtptr_destructor(void *ptr)
+{
+	if (ptr != NULL) {
+		free(ptr);
+		gmtptr = NULL;
+	}
+}
+
+static void gmtptr_init_key(void)
+{
+	gmtptr_key_create_status = pthread_key_create(&gmtptr_key, gmtptr_destructor);
+}
 /* SPANGRES END */
 
 /* Initialize *S to a value based on UTOFF, ISDST, and DESIGIDX.  */
@@ -1367,11 +1389,38 @@ gmtsub(pg_time_t const *timep, int32 offset,
 	// SPANGRES: Make gmtptr global so that it can be cleaned up.
 	if (gmtptr == NULL)
 	{
+		/* SPANGRES BEGIN */
+		int rc;
+		/* SPANGRES END */
+
 		/* Allocate on first use */
 		gmtptr = (struct state *) malloc(sizeof(struct state));
 		if (gmtptr == NULL)
 			return NULL;		/* errno should be set by malloc */
 		gmtload(gmtptr);
+
+		/* SPANGRES BEGIN */
+		/* Register with pthread to ensure cleanup on thread exit */
+		rc = pthread_once(&gmtptr_once_control, gmtptr_init_key);
+		if (rc == 0 && gmtptr_key_create_status != 0)
+			rc = gmtptr_key_create_status;
+		if (rc != 0)
+		{
+			free(gmtptr);
+			gmtptr = NULL;
+			errno = rc;
+			return NULL;
+		}
+
+		rc = pthread_setspecific(gmtptr_key, gmtptr);
+		if (rc != 0)
+		{
+			free(gmtptr);
+			gmtptr = NULL;
+			errno = rc;
+			return NULL;
+		}
+		/* SPANGRES END */
 	}
 
 	result = timesub(timep, offset, gmtptr, tmp);

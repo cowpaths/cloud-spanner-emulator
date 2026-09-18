@@ -38,8 +38,8 @@
 #include "absl/status/statusor.h"
 #include "third_party/spanner_pg/interface/parser_output.h"
 #include "third_party/spanner_pg/postgres_includes/all.h"
-#include "zetasql/base/ret_check.h"
-#include "zetasql/base/status_macros.h"
+#include "googlesql/base/ret_check.h"
+#include "googlesql/base/status_macros.h"
 
 namespace postgres_translator {
 
@@ -112,8 +112,8 @@ absl::StatusOr<List*> CheckedPgListConcat(List* list1, const List* list2);
 template <typename NodeType>
 absl::StatusOr<NodeType*> CheckedPgLinitialNode(List* list) {
   ListCell* lc;
-  ZETASQL_ASSIGN_OR_RETURN(lc, CheckedPgListHead(list));
-  ZETASQL_RET_CHECK(lc != nullptr);
+  GOOGLESQL_ASSIGN_OR_RETURN(lc, CheckedPgListHead(list));
+  GOOGLESQL_RET_CHECK(lc != nullptr);
   return reinterpret_cast<NodeType*>(lfirst(lc));
 }
 
@@ -164,6 +164,10 @@ absl::Status CheckedPgGetTyplenbyvalalign(Oid typid, int16_t* typlen,
                                           bool* typbyval, char* typalign);
 absl::StatusOr<ArrayType*> CheckedPgDatumGetArrayTypeP(Datum datum);
 absl::StatusOr<Type> CheckedPgTypeidType(Oid id);
+absl::StatusOr<bool> CheckedPgSplitIdentifierString(char* rawstring,
+                                                    char separator,
+                                                    List** namelist);
+absl::StatusOr<const char*> CheckedPgQuoteIdentifier(const char* ident);
 
 #define CheckedPgMakeNode(_type_) \
   CheckedPgMakeNodeTemplate<_type_>(sizeof(_type_), T_##_type_)
@@ -171,12 +175,12 @@ absl::StatusOr<Type> CheckedPgTypeidType(Oid id);
 template <typename NodeType>
 absl::StatusOr<NodeType*> CheckedPgMakeNodeTemplate(size_t size, NodeTag tag) {
   Node* node;
-  ZETASQL_ASSIGN_OR_RETURN(node, CheckedPgMakeNodeImpl(size, tag));
+  GOOGLESQL_ASSIGN_OR_RETURN(node, CheckedPgMakeNodeImpl(size, tag));
   // This is the same as PostgresCastNode(), but we can't call it as postgres.h
   // needs to include error_shim.h. So if we use PostgresCastNode() here, we
   // need to include postgres.h, which introduces a circular dependency.
-  ZETASQL_RET_CHECK_NE(node, nullptr);
-  ZETASQL_RET_CHECK_EQ(node->type, tag);
+  GOOGLESQL_RET_CHECK_NE(node, nullptr);
+  GOOGLESQL_RET_CHECK_EQ(node->type, tag);
   return reinterpret_cast<NodeType*>(node);
 }
 
@@ -212,6 +216,7 @@ absl::Status CheckedPgTimezoneInitialize(void);
 absl::StatusOr<pg_tz*> CheckedPgTZOffsetSet(int32_t gmt_offset);
 
 absl::StatusOr<int64_t> CheckedPgDefGetInt64(DefElem* def);
+absl::StatusOr<double> CheckedPgDefGetNumeric(DefElem* def);
 
 }  // namespace postgres_translator
 

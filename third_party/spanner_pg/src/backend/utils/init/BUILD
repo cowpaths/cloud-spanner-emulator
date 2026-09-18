@@ -46,7 +46,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_library(
     name = "init",
@@ -54,6 +54,7 @@ cc_library(
         "globals.c",
         "miscinit.c",
         "postinit.c",
+        "usercontext.c",
     ],
     copts = [
         "-D_GNU_SOURCE",

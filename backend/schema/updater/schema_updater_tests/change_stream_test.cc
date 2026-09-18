@@ -23,13 +23,14 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "absl/time/clock.h"
 #include "backend/schema/catalog/column.h"
 #include "backend/schema/updater/schema_updater_tests/base.h"
 #include "common/errors.h"
+#include "common/feature_flags.h"
 
 namespace google {
 namespace spanner {
@@ -41,9 +42,9 @@ namespace {
 
 using database_api::DatabaseDialect::POSTGRESQL;
 using testing::HasSubstr;
-using zetasql_base::testing::IsOk;
+using googlesql_base::testing::IsOk;
 TEST_P(SchemaUpdaterTest, CreateChangeStreamBasic) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
       CREATE TABLE T (
         k1 INT64,
         c1 STRING(100),
@@ -120,7 +121,7 @@ TEST_P(SchemaUpdaterTest, CreateChangeStreamBasic) {
 }
 
 TEST_P(SchemaUpdaterTest, CanDropExplicitlyTrackedTablesAfterDropChangeStream) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
                        CreateSchema({R"(
           CREATE TABLE Users(
             UserId     INT64 NOT NULL,
@@ -129,7 +130,7 @@ TEST_P(SchemaUpdaterTest, CanDropExplicitlyTrackedTablesAfterDropChangeStream) {
           ) PRIMARY KEY (UserId)
         )",
                                      R"(CREATE CHANGE STREAM C FOR Users)"}));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto updated_schema, UpdateSchema(schema.get(), {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto updated_schema, UpdateSchema(schema.get(), {
                                                                            R"(
       DROP CHANGE STREAM C)"}));
   EXPECT_EQ(updated_schema->FindTable("Users")
@@ -146,7 +147,7 @@ TEST_P(SchemaUpdaterTest, CanDropExplicitlyTrackedTablesAfterDropChangeStream) {
 
 TEST_P(SchemaUpdaterTest,
        CanDropExplicitlyTrackedTablesAfterAlterChangeStream) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
                        CreateSchema({R"(
           CREATE TABLE Users(
             UserId     INT64 NOT NULL,
@@ -155,7 +156,7 @@ TEST_P(SchemaUpdaterTest,
           ) PRIMARY KEY (UserId)
         )",
                                      R"(CREATE CHANGE STREAM C FOR Users)"}));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto updated_schema, UpdateSchema(schema.get(), {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto updated_schema, UpdateSchema(schema.get(), {
                                                                            R"(
       ALTER CHANGE STREAM C SET FOR ALL)"}));
   EXPECT_EQ(updated_schema->FindTable("Users")->change_streams().size(), 1);
@@ -172,7 +173,7 @@ TEST_P(SchemaUpdaterTest,
 }
 
 TEST_P(SchemaUpdaterTest, CanDropImplicitlyTrackedTablesColumns) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
                        CreateSchema({R"(
           CREATE TABLE Users(
             UserId     INT64 NOT NULL,
@@ -197,7 +198,7 @@ TEST_P(SchemaUpdaterTest, CanDropImplicitlyTrackedTablesColumns) {
       Drop Table Users)"})
                   .status(),
               IsOk());
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       schema, CreateSchema({R"(
           CREATE TABLE Users(
             UserId     INT64 NOT NULL,
@@ -222,7 +223,7 @@ TEST_P(SchemaUpdaterTest, CanDropImplicitlyTrackedTablesColumns) {
                        R"(
       Drop Table Users)"}),
       StatusIs(error::DropTableWithChangeStream("Users", 1, "CS_Users")));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       schema,
       CreateSchema({R"(
           CREATE TABLE Users(
@@ -249,7 +250,7 @@ TEST_P(SchemaUpdaterTest, CanDropImplicitlyTrackedTablesColumns) {
 }
 
 TEST_P(SchemaUpdaterTest, CreateChangeStreamTrackingInterleavedTables) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
                        CreateSchema({R"(
           CREATE TABLE Users(
             UserId     INT64 NOT NULL,
@@ -289,7 +290,7 @@ TEST_P(SchemaUpdaterTest, CreateChangeStreamAlreadyExists) {
 }
 
 TEST_P(SchemaUpdaterTest, CreateChangeStreamIfNotExists) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({
                                         R"(
       CREATE CHANGE STREAM C FOR ALL)",
                                         R"(
@@ -298,7 +299,7 @@ TEST_P(SchemaUpdaterTest, CreateChangeStreamIfNotExists) {
 }
 
 TEST_P(SchemaUpdaterTest, CreateChangeStreamIfNotExistsIntermediateStatement) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
       CREATE CHANGE STREAM C FOR ALL)",
                                                   R"(
       CREATE CHANGE STREAM IF NOT EXISTS C FOR ALL)",
@@ -320,7 +321,7 @@ TEST_P(SchemaUpdaterTest, CreateChangeStreamIfNotExistsIntermediateStatement) {
   EXPECT_THAT(change_stream->tracked_tables_columns().find("T")->second,
               testing::UnorderedElementsAre("k1", "c1"));
   EXPECT_TRUE(schema->FindTable("T")->FindChangeStream("C"));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       schema,
       UpdateSchema(schema.get(), {R"(ALTER TABLE T ADD COLUMN c2 INT64)"}));
   ASSERT_EQ(schema->FindTable("T")->FindColumn("c2")->change_streams().size(),
@@ -334,7 +335,7 @@ TEST_P(SchemaUpdaterTest, CreateChangeStreamIfNotExistsIntermediateStatement) {
 }
 
 TEST_P(SchemaUpdaterTest, CreateChangeStream_NullOptions) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE Singers (
   SingerId STRING(20) NOT NULL,
   Name STRING(20),
@@ -343,7 +344,7 @@ TEST_P(SchemaUpdaterTest, CreateChangeStream_NullOptions) {
                                                   R"(
               CREATE CHANGE STREAM change_stream FOR Singers
             )"}));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       schema,
       UpdateSchema(
           schema.get(),
@@ -351,7 +352,7 @@ TEST_P(SchemaUpdaterTest, CreateChangeStream_NullOptions) {
 }
 
 TEST_P(SchemaUpdaterTest, CreateChangeStreamRegisteredSuccessfully) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
                        CreateSchema({R"(
       CREATE TABLE T (
         k1 INT64,
@@ -375,7 +376,7 @@ TEST_P(SchemaUpdaterTest, CreateChangeStreamRegisteredSuccessfully) {
 // after altering the change stream to track the entire database or track the
 // entire table by table name.
 TEST_P(SchemaUpdaterTest, AlterChangeStreamImplicitlyTrackingEntireTable) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table (
                 int64_col INT64 NOT NULL,
                 string_col STRING(MAX),
@@ -386,7 +387,7 @@ TEST_P(SchemaUpdaterTest, AlterChangeStreamImplicitlyTrackingEntireTable) {
               CREATE CHANGE STREAM change_stream_test_table FOR test_table(string_col)
             )"}));
   EXPECT_EQ(schema->FindTable("test_table")->change_streams().size(), 0);
-  ZETASQL_ASSERT_OK_AND_ASSIGN(schema, UpdateSchema(schema.get(), {R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(schema, UpdateSchema(schema.get(), {R"(
               ALTER CHANGE STREAM change_stream_test_table SET FOR ALL
             )"}));
   std::vector<std::string> tracked_columns =
@@ -402,7 +403,7 @@ TEST_P(SchemaUpdaterTest, AlterChangeStreamImplicitlyTrackingEntireTable) {
   EXPECT_EQ(schema->FindTable("test_table")->change_streams().size(), 1);
   EXPECT_EQ(schema->FindTable("test_table")->change_streams()[0]->Name(),
             "change_stream_test_table");
-  ZETASQL_ASSERT_OK_AND_ASSIGN(schema, UpdateSchema(schema.get(), {R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(schema, UpdateSchema(schema.get(), {R"(
               ALTER CHANGE STREAM change_stream_test_table SET FOR test_table(bool_col)
             )"}));
   EXPECT_EQ(schema->FindTable("test_table")->change_streams().size(), 0);
@@ -416,7 +417,7 @@ TEST_P(SchemaUpdaterTest, AlterChangeStreamImplicitlyTrackingEntireTable) {
                 ->change_streams()
                 .size(),
             0);
-  ZETASQL_ASSERT_OK_AND_ASSIGN(schema, UpdateSchema(schema.get(), {R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(schema, UpdateSchema(schema.get(), {R"(
               ALTER CHANGE STREAM change_stream_test_table SET FOR test_table
             )"}));
   EXPECT_EQ(schema->FindTable("test_table")->change_streams().size(), 1);
@@ -426,7 +427,7 @@ TEST_P(SchemaUpdaterTest, AlterChangeStreamImplicitlyTrackingEntireTable) {
 // after dropping the change stream, which tracks the table by its name.
 TEST_P(SchemaUpdaterTest,
        CreateChangeStreamImplicitlyTrackingEntireTableByTableName) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table (
                 int64_col INT64 NOT NULL,
                 string_col STRING(MAX)
@@ -447,7 +448,7 @@ TEST_P(SchemaUpdaterTest,
                 ->change_streams()[0]
                 ->Name(),
             "change_stream_test_table");
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       schema,
       UpdateSchema(schema.get(),
                    {R"(ALTER TABLE test_table ADD COLUMN added_col INT64)"}));
@@ -458,7 +459,7 @@ TEST_P(SchemaUpdaterTest,
             "change_stream_test_table");
   EXPECT_EQ(schema->FindTable("test_table")->change_streams()[0]->Name(),
             "change_stream_test_table");
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       schema, UpdateSchema(schema.get(),
                            {R"(DROP CHANGE STREAM change_stream_test_table)"}));
   // Make sure table->change_streams() is updated when the
@@ -481,7 +482,7 @@ TEST_P(SchemaUpdaterTest,
 // the entire database.
 TEST_P(SchemaUpdaterTest,
        CreateChangeStreamImplicitlyTrackingEntireTableByAll) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table1 (
                 int64_col INT64 NOT NULL,
                 string_col STRING(MAX)
@@ -502,7 +503,7 @@ TEST_P(SchemaUpdaterTest,
   EXPECT_EQ(schema->FindTable("test_table2")->change_streams().size(), 1);
   EXPECT_EQ(schema->FindTable("test_table2")->change_streams()[0]->Name(),
             "change_stream_test_table");
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       schema,
       UpdateSchema(schema.get(),
                    {R"(ALTER TABLE test_table1 ADD COLUMN added_col INT64)"}));
@@ -511,7 +512,7 @@ TEST_P(SchemaUpdaterTest,
                 ->change_streams()[0]
                 ->Name(),
             "change_stream_test_table");
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       schema, UpdateSchema(schema.get(),
                            {R"(DROP CHANGE STREAM change_stream_test_table)"}));
   // Make sure table->change_streams() is updated when the
@@ -535,7 +536,7 @@ TEST_P(SchemaUpdaterTest,
 // change_streams.
 TEST_P(SchemaUpdaterTest,
        CreateChangeStreamExplicitlyTrackingAllColumnsInATable) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table (
                 int64_col INT64 NOT NULL,
                 string_col STRING(MAX)
@@ -555,7 +556,7 @@ TEST_P(SchemaUpdaterTest,
 }
 
 TEST_P(SchemaUpdaterTest, CreateChangeStreamExplicitlyTrackingColumns) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table (
                 int64_col INT64 NOT NULL,
                 string_col STRING(MAX)
@@ -579,7 +580,7 @@ TEST_P(SchemaUpdaterTest, CreateChangeStreamExplicitlyTrackingColumns) {
 
 TEST_P(SchemaUpdaterTest,
        CreateChangeStreamTrackOnlyPKWithChangeStreamsNoLimit) {
-  ZETASQL_EXPECT_OK(CreateSchema({R"(
+  GOOGLESQL_EXPECT_OK(CreateSchema({R"(
               CREATE TABLE test_table (
                 int64_col INT64 NOT NULL,
                 string_col STRING(MAX)
@@ -613,7 +614,7 @@ TEST_P(SchemaUpdaterTest,
 }
 
 TEST_P(SchemaUpdaterTest, AlterChangeStreamSetOptionsTrackSameObjects) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto schema,
       CreateSchema(
           {R"(
@@ -636,7 +637,7 @@ TEST_P(SchemaUpdaterTest, AlterChangeStreamSetOptionsTrackSameObjects) {
 }
 
 TEST_P(SchemaUpdaterTest, AlterChangeStreamSetForClauseTrackDifferentObjects) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
                        CreateSchema({R"(
       CREATE TABLE T (
         k1 INT64,
@@ -663,7 +664,7 @@ TEST_P(SchemaUpdaterTest, AlterChangeStreamSetForClauseTrackDifferentObjects) {
 }
 
 TEST_P(SchemaUpdaterTest, AlterChangeStreamSetForClauseTrackOnlyPK) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table (
                 int64_col INT64 NOT NULL,
                 string_col STRING(MAX),
@@ -693,7 +694,7 @@ TEST_P(SchemaUpdaterTest, AlterChangeStreamSetForClauseTrackOnlyPK) {
 }
 
 TEST_P(SchemaUpdaterTest, AlterChangeStreamDropForClause) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
                        CreateSchema({R"(
       CREATE TABLE T (
         k1 INT64,
@@ -711,7 +712,7 @@ TEST_P(SchemaUpdaterTest, AlterChangeStreamDropForClause) {
 }
 
 TEST_P(SchemaUpdaterTest, SetOptionsRetentionPeriod) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({
                                         R"(
       CREATE TABLE T (
         k1 INT64,
@@ -736,7 +737,7 @@ TEST_P(SchemaUpdaterTest, SetOptionsRetentionPeriod) {
 }
 
 TEST_P(SchemaUpdaterTest, SetOptions_ValueCaptureType) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto schema,
       CreateSchema({
           R"(
@@ -754,7 +755,7 @@ TEST_P(SchemaUpdaterTest, SetOptions_ValueCaptureType) {
           schema.get(),
           {R"(ALTER CHANGE STREAM C SET OPTIONS ( value_capture_type = 'OLD_VALUES'))"}),
       StatusIs(error::InvalidValueCaptureType("OLD_VALUES")));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto new_schema, UpdateSchema(schema.get(), {R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto new_schema, UpdateSchema(schema.get(), {R"(
       CREATE CHANGE STREAM C2 FOR ALL
       OPTIONS ( value_capture_type = 'NEW_ROW_AND_OLD_VALUES' ))"}));
   EXPECT_EQ(new_schema->FindChangeStream("C2")->value_capture_type(),
@@ -762,7 +763,7 @@ TEST_P(SchemaUpdaterTest, SetOptions_ValueCaptureType) {
 }
 
 TEST_P(SchemaUpdaterTest, SetOptions_ExclusionOptions) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema(
                                         {
                                             R"(
       CREATE TABLE T (
@@ -778,7 +779,7 @@ TEST_P(SchemaUpdaterTest, SetOptions_ExclusionOptions) {
   EXPECT_EQ(schema->FindChangeStream("C")->exclude_delete(), false);
   EXPECT_EQ(schema->FindChangeStream("C")->exclude_ttl_deletes(), true);
 
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto new_schema,
       UpdateSchema(
           schema.get(),
@@ -790,7 +791,7 @@ TEST_P(SchemaUpdaterTest, SetOptions_ExclusionOptions) {
             std::nullopt);
 
   if (GetParam() == database_api::DatabaseDialect::POSTGRESQL) {
-    ZETASQL_EXPECT_OK(UpdateSchema(
+    GOOGLESQL_EXPECT_OK(UpdateSchema(
         schema.get(),
         {R"(ALTER CHANGE STREAM C SET ( exclude_insert = 'true'))"}, "",
         GetParam(), false));
@@ -800,14 +801,103 @@ TEST_P(SchemaUpdaterTest, SetOptions_ExclusionOptions) {
             schema.get(),
             {R"(ALTER CHANGE STREAM C SET OPTIONS ( exclude_insert = 'true'))"},
             "", GetParam(), true),
-        ::zetasql_base::testing::StatusIs(
+        ::googlesql_base::testing::StatusIs(
             absl::StatusCode::kInvalidArgument,
             HasSubstr("Supported option values are booleans and NULL.")));
   }
 }
 
+TEST_P(SchemaUpdaterTest, SetOptions_AllowTxnExclusion) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema(
+                                        {
+                                            R"(
+      CREATE TABLE T (
+        k1 INT64,
+        c1 STRING(100),
+      ) PRIMARY KEY (k1)
+    )",
+                                            R"(
+      CREATE CHANGE STREAM C FOR ALL OPTIONS ( allow_txn_exclusion = true ))"},
+                                        "", GetParam(), true));
+  EXPECT_EQ(schema->FindChangeStream("C")->allow_txn_exclusion(), true);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto new_schema,
+      UpdateSchema(
+          schema.get(),
+          {R"(CREATE CHANGE STREAM C2 OPTIONS( allow_txn_exclusion = NULL))"}));
+  EXPECT_EQ(new_schema->FindChangeStream("C2")->allow_txn_exclusion(),
+            std::nullopt);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      new_schema,
+      UpdateSchema(
+          schema.get(),
+          {R"(CREATE CHANGE STREAM C2 OPTIONS( allow_txn_exclusion = false))"}));
+  EXPECT_EQ(new_schema->FindChangeStream("C2")->allow_txn_exclusion(), false);
+}
+
+TEST_P(SchemaUpdaterTest, SetOptions_PartitionMode) {
+  EmulatorFeatureFlags::Flags flags;
+  flags.enable_mutable_key_range_change_stream = true;
+  ScopedEmulatorFeatureFlagsSetter setter(flags);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema(
+                                        {
+                                            R"(
+      CREATE TABLE T (
+        k1 INT64,
+        c1 STRING(100),
+      ) PRIMARY KEY (k1)
+    )",
+                                            R"(
+      CREATE CHANGE STREAM C1 FOR ALL OPTIONS (
+        partition_mode = 'MUTABLE_KEY_RANGE'
+      ))",
+                                            R"(
+      CREATE CHANGE STREAM C2 FOR ALL OPTIONS (
+        partition_mode = 'IMMUTABLE_KEY_RANGE'
+      ))"},
+                                        "", GetParam(), true));
+  EXPECT_EQ(schema->FindChangeStream("C1")->partition_mode(),
+            kChangeStreamPartitionModeMutableKeyRange);
+  EXPECT_EQ(schema->FindChangeStream("C2")->partition_mode(),
+            kChangeStreamPartitionModeImmutableKeyRange);
+
+  if (GetParam() == database_api::DatabaseDialect::POSTGRESQL) {
+    EXPECT_EQ(schema->FindChangeStream("C1")->tvf_name(),
+              "read_proto_bytes_C1");
+    EXPECT_EQ(schema->FindChangeStream("C2")->tvf_name(), "read_json_C2");
+  } else {
+    EXPECT_EQ(schema->FindChangeStream("C1")->tvf_name(), "READ_C1");
+    EXPECT_EQ(schema->FindChangeStream("C2")->tvf_name(), "READ_C2");
+  }
+
+  // Dump change stream statement to cover DumpChangeStream in schema.cc
+  ddl::DDLStatementList ddl_statements = schema->Dump();
+  EXPECT_GT(ddl_statements.statement_size(), 0);
+
+  // Invalid partition_mode value
+  EXPECT_THAT(
+      UpdateSchema(schema.get(), {R"(CREATE CHANGE STREAM C_invalid OPTIONS
+            ( partition_mode = 'INVALID_MODE' ))"}),
+      StatusIs(error::InvalidChangeStreamPartitionMode("INVALID_MODE")));
+}
+
+TEST_P(SchemaUpdaterTest, SetOptions_PartitionModeOptionsDisabled) {
+  EmulatorFeatureFlags::Flags flags;
+  flags.enable_mutable_key_range_change_stream = false;
+  ScopedEmulatorFeatureFlagsSetter setter(flags);
+
+  EXPECT_THAT(CreateSchema({R"(
+        CREATE CHANGE STREAM C FOR ALL OPTIONS (
+          partition_mode = 'MUTABLE_KEY_RANGE'
+        ))"}),
+              StatusIs(error::UnsupportedChangeStreamOption("partition_mode")));
+}
+
 TEST_P(SchemaUpdaterTest, DropChangeStream) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table (
                 int64_col INT64 NOT NULL
               ) PRIMARY KEY (int64_col)
@@ -821,7 +911,7 @@ TEST_P(SchemaUpdaterTest, DropChangeStream) {
   ASSERT_TRUE(table->FindChangeStream("C"));
   ASSERT_FALSE(table->FindColumn("int64_col")->FindChangeStream("C"));
 
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto new_schema,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto new_schema,
                        UpdateSchema(schema.get(), {R"(DROP CHANGE STREAM C)"}));
   EXPECT_EQ(new_schema->FindTable("_change_stream_data_C"), nullptr);
   EXPECT_EQ(new_schema->FindTable("_change_stream_partition_C"), nullptr);
@@ -830,12 +920,12 @@ TEST_P(SchemaUpdaterTest, DropChangeStream) {
   EXPECT_EQ(new_table->change_streams().size(), 0);
   ASSERT_FALSE(new_table->FindColumn("int64_col")->FindChangeStream("C"));
   EXPECT_EQ(new_table->FindColumn("int64_col")->change_streams().size(), 0);
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       new_schema, UpdateSchema(schema.get(), {R"(DROP TABLE test_table)"}));
 }
 
 TEST_P(SchemaUpdaterTest, DropAndRecreateChangeStream) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
       CREATE TABLE T (
         k1 INT64,
         c1 STRING(100),
@@ -853,7 +943,7 @@ TEST_P(SchemaUpdaterTest, DropAndRecreateChangeStream) {
   std::string change_stream_partition_table_id_0 =
       change_stream_partition_table_c->id();
   EXPECT_NE(change_stream_partition_table_c, nullptr);
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto new_schema_1,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto new_schema_1,
                        UpdateSchema(schema.get(), {R"(DROP CHANGE STREAM C)"}));
   EXPECT_EQ(new_schema_1->FindTable("_change_stream_data_C"), nullptr);
   EXPECT_EQ(new_schema_1->FindTable("_change_stream_partition_C"), nullptr);
@@ -862,7 +952,7 @@ TEST_P(SchemaUpdaterTest, DropAndRecreateChangeStream) {
       new_schema_1->FindTable("T")->FindColumn("k1")->FindChangeStream("C"));
   ASSERT_FALSE(
       new_schema_1->FindTable("T")->FindColumn("c1")->FindChangeStream("C"));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto new_schema_2,
       UpdateSchema(new_schema_1.get(), {R"(CREATE CHANGE STREAM C FOR ALL)"}));
   change_stream_c = new_schema_2->FindChangeStream("C");
@@ -883,7 +973,7 @@ TEST_P(SchemaUpdaterTest, DropAndRecreateChangeStream) {
 }
 
 TEST_P(SchemaUpdaterTest, CreateChangeStreamTrackAll_TracksNewlyAddedColumns) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table (
                 int64_col INT64 NOT NULL,
                 string_col STRING(MAX)
@@ -915,7 +1005,7 @@ TEST_P(SchemaUpdaterTest, CreateChangeStreamTrackAll_TracksNewlyAddedColumns) {
 
 TEST_P(SchemaUpdaterTest,
        ChangeStreamTrackEntireTable_TracksNewlyAddedColumns) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table (
                 int64_col INT64 NOT NULL,
                 string_col STRING(MAX)
@@ -946,7 +1036,7 @@ TEST_P(SchemaUpdaterTest,
 }
 
 TEST_P(SchemaUpdaterTest, ChangeStreamTrackAll_TracksNewlyAddedTable) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table (
                 int64_col INT64 NOT NULL,
                 string_col STRING(MAX)
@@ -983,7 +1073,7 @@ TEST_P(SchemaUpdaterTest, ChangeStreamTrackAll_TracksNewlyAddedTable) {
 
 TEST_P(SchemaUpdaterTest,
        CanDropExplicitlyTrackedTablesColumnAfterDropChangeStream) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto schema, CreateSchema({R"(
           CREATE TABLE Users(
             UserId     INT64 NOT NULL,
@@ -993,16 +1083,16 @@ TEST_P(SchemaUpdaterTest,
         )",
                                  R"(CREATE CHANGE STREAM C FOR Users(Name))"}));
 
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto updated_schema, UpdateSchema(schema.get(), {R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto updated_schema, UpdateSchema(schema.get(), {R"(
       DROP CHANGE STREAM C)"}));
 
-  ZETASQL_ASSERT_OK(UpdateSchema(updated_schema.get(), {R"(
+  GOOGLESQL_ASSERT_OK(UpdateSchema(updated_schema.get(), {R"(
       ALTER TABLE Users DROP COLUMN Name)"}));
 }
 
 TEST_P(SchemaUpdaterTest,
        CanDropExplicitlyTrackedTablesColumnAfterAlterChangeStream) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto schema, CreateSchema({R"(
           CREATE TABLE Users(
             UserId     INT64 NOT NULL,
@@ -1012,15 +1102,15 @@ TEST_P(SchemaUpdaterTest,
         )",
                                  R"(CREATE CHANGE STREAM C FOR Users(Name))"}));
 
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto updated_schema, UpdateSchema(schema.get(), {R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto updated_schema, UpdateSchema(schema.get(), {R"(
       ALTER CHANGE STREAM C SET FOR Users(Age))"}));
 
-  ZETASQL_ASSERT_OK(UpdateSchema(updated_schema.get(), {R"(
+  GOOGLESQL_ASSERT_OK(UpdateSchema(updated_schema.get(), {R"(
       ALTER TABLE Users DROP COLUMN Name)"}));
 }
 
 TEST_P(SchemaUpdaterTest, AlterChangeStreamSetForClauseAddsAllTrackedTables) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
                        CreateSchema({R"(
       CREATE TABLE a (id INT64 NOT NULL PRIMARY KEY)
     )",
@@ -1030,7 +1120,7 @@ TEST_P(SchemaUpdaterTest, AlterChangeStreamSetForClauseAddsAllTrackedTables) {
                                      R"(CREATE CHANGE STREAM s FOR a)"}));
 
   // Alter the change stream to track both table a and b.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto updated_schema,
       UpdateSchema(schema.get(), {R"(ALTER CHANGE STREAM s SET FOR a, b)"}));
 
@@ -1042,6 +1132,147 @@ TEST_P(SchemaUpdaterTest, AlterChangeStreamSetForClauseAddsAllTrackedTables) {
   EXPECT_TRUE(tracked_tables.contains("a"));
   EXPECT_TRUE(tracked_tables.contains("b"));
   EXPECT_EQ(tracked_tables.size(), 2);
+}
+
+TEST_P(SchemaUpdaterTest, AlterChangeStream_PartitionModeBlocked) {
+  EmulatorFeatureFlags::Flags flags;
+  flags.enable_mutable_key_range_change_stream = true;
+  ScopedEmulatorFeatureFlagsSetter setter(flags);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+      CREATE TABLE T (
+        k1 INT64,
+        c1 STRING(100),
+      ) PRIMARY KEY (k1)
+    )",
+                                                  R"(
+      CREATE CHANGE STREAM C1 FOR ALL OPTIONS (
+        partition_mode = 'MUTABLE_KEY_RANGE'
+      ))",
+                                                  R"(
+      CREATE CHANGE STREAM C2 FOR ALL
+    )"}));
+
+  // Altering C1 (MUTABLE) to IMMUTABLE should fail
+  EXPECT_THAT(UpdateSchema(schema.get(), {R"(ALTER CHANGE STREAM C1 SET OPTIONS
+            (partition_mode = 'IMMUTABLE_KEY_RANGE'))"}),
+              StatusIs(error::AlterChangeStreamPartitionModeNotAllowed(
+                  "C1", "MUTABLE_KEY_RANGE")));
+
+  // Altering C2 (default IMMUTABLE) to MUTABLE should fail
+  EXPECT_THAT(UpdateSchema(schema.get(), {R"(ALTER CHANGE STREAM C2 SET OPTIONS
+            (partition_mode = 'MUTABLE_KEY_RANGE'))"}),
+              StatusIs(error::AlterChangeStreamPartitionModeNotAllowed(
+                  "C2", "IMMUTABLE_KEY_RANGE")));
+
+  // Altering C1 to MUTABLE (same value) should succeed
+  GOOGLESQL_EXPECT_OK(UpdateSchema(schema.get(), {R"(ALTER CHANGE STREAM C1 SET OPTIONS
+        (partition_mode = 'MUTABLE_KEY_RANGE'))"}));
+
+  // Altering C2 to IMMUTABLE (same value) should succeed
+  GOOGLESQL_EXPECT_OK(UpdateSchema(schema.get(), {R"(ALTER CHANGE STREAM C2 SET OPTIONS
+        (partition_mode = 'IMMUTABLE_KEY_RANGE'))"}));
+}
+
+TEST_P(SchemaUpdaterTest, AlterChangeStreamAfterDroppingColumnOnTrackedTable) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+      CREATE TABLE Orders (
+        OrderId STRING(36) NOT NULL,
+        Status STRING(32),
+        Channel STRING(32)
+      ) PRIMARY KEY (OrderId)
+    )",
+                                                  R"(
+      CREATE CHANGE STREAM OrdersStream FOR Orders
+    )"}));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema_after_drop, UpdateSchema(schema.get(), {R"(
+      ALTER TABLE Orders DROP COLUMN Channel
+    )"}));
+
+  EXPECT_THAT(UpdateSchema(schema_after_drop.get(), {R"(
+      ALTER CHANGE STREAM OrdersStream SET FOR Orders
+    )"}),
+              IsOk());
+
+  EXPECT_THAT(UpdateSchema(schema_after_drop.get(), {R"(
+      ALTER CHANGE STREAM OrdersStream SET FOR Orders(Status)
+    )"}),
+              IsOk());
+
+  EXPECT_THAT(UpdateSchema(schema_after_drop.get(), {R"(
+      ALTER CHANGE STREAM OrdersStream SET FOR ALL
+    )"}),
+              IsOk());
+
+  EXPECT_THAT(UpdateSchema(schema_after_drop.get(), {R"(
+      ALTER CHANGE STREAM OrdersStream DROP FOR ALL
+    )"}),
+              IsOk());
+
+  EXPECT_THAT(UpdateSchema(schema_after_drop.get(), {R"(
+      ALTER CHANGE STREAM OrdersStream SET FOR Orders(Channel)
+    )"}),
+              StatusIs(error::NonexistentTrackedColumnInChangeStream(
+                  "OrdersStream", "Channel", "Orders")));
+}
+
+TEST_P(SchemaUpdaterTest, AlterChangeStreamAfterDroppingTableOnTrackAll) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
+      CREATE TABLE Orders (
+        OrderId STRING(36) NOT NULL,
+        Status STRING(32)
+      ) PRIMARY KEY (OrderId)
+    )",
+                                                  R"(
+      CREATE CHANGE STREAM CS FOR ALL
+    )"}));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema_after_drop, UpdateSchema(schema.get(), {R"(
+      DROP TABLE Orders
+    )"}));
+
+  EXPECT_THAT(UpdateSchema(schema_after_drop.get(), {R"(
+      ALTER CHANGE STREAM CS SET FOR ALL
+    )"}),
+              IsOk());
+
+  EXPECT_THAT(UpdateSchema(schema_after_drop.get(), {R"(
+      ALTER CHANGE STREAM CS DROP FOR ALL
+    )"}),
+              IsOk());
+}
+
+TEST(ChangeStreamErrorsTest, UnsupportedChangeStreamOptionCoverage) {
+  // Test with flag = true
+  {
+    EmulatorFeatureFlags::Flags flags;
+    flags.enable_mutable_key_range_change_stream = true;
+    ScopedEmulatorFeatureFlagsSetter setter(flags);
+
+    absl::Status status = error::UnsupportedChangeStreamOption("my_option");
+    absl::Status expected =
+        absl::Status(absl::StatusCode::kFailedPrecondition,
+                     "Invalid Change Stream Option: my_option. "
+                     "Supported options are retention_period, "
+                     "value_capture_type, and partition_mode.");
+    EXPECT_EQ(status, expected);
+  }
+
+  // Test with flag = false
+  {
+    EmulatorFeatureFlags::Flags flags;
+    flags.enable_mutable_key_range_change_stream = false;
+    ScopedEmulatorFeatureFlagsSetter setter(flags);
+
+    absl::Status status = error::UnsupportedChangeStreamOption("my_option");
+    absl::Status expected =
+        absl::Status(absl::StatusCode::kFailedPrecondition,
+                     "Invalid Change Stream Option: my_option. "
+                     "Supported options are retention_period "
+                     "and value_capture_type.");
+    EXPECT_EQ(status, expected);
+  }
 }
 
 }  // namespace

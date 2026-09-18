@@ -19,13 +19,13 @@
 #include <utility>
 
 #include "google/spanner/admin/database/v1/common.pb.h"
-#include "zetasql/public/analyzer_options.h"
-#include "zetasql/public/types/array_type.h"
-#include "zetasql/public/types/type_factory.h"
-#include "zetasql/public/value.h"
+#include "googlesql/public/analyzer_options.h"
+#include "googlesql/public/types/array_type.h"
+#include "googlesql/public/types/type_factory.h"
+#include "googlesql/public/value.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -37,15 +37,17 @@
 #include "backend/query/catalog.h"
 #include "backend/query/change_stream/change_stream_query_validator.h"
 #include "backend/query/function_catalog.h"
+#include "backend/schema/catalog/change_stream.h"
 #include "backend/schema/catalog/schema.h"
 #include "common/constants.h"
 #include "common/errors.h"
 #include "common/limits.h"
 #include "tests/common/schema_constructor.h"
+#include "tests/common/scoped_feature_flags_setter.h"
+#include "googlesql/base/status_macros.h"
 #include "third_party/spanner_pg/interface/emulator_parser.h"
 #include "third_party/spanner_pg/interface/pg_arena.h"
 #include "third_party/spanner_pg/shims/memory_context_pg_arena.h"
-#include "zetasql/base/status_macros.h"
 
 namespace google {
 namespace spanner {
@@ -55,7 +57,8 @@ namespace {
 
 using ::google::spanner::emulator::backend::
     kCloudSpannerEmulatorFunctionCatalogName;
-using zetasql_base::testing::StatusIs;
+using googlesql_base::testing::IsOkAndHolds;
+using googlesql_base::testing::StatusIs;
 namespace database_api = ::google::spanner::admin::database::v1;
 
 class PgChangeStreamQueryValidatorTest : public testing::Test {
@@ -72,10 +75,10 @@ class PgChangeStreamQueryValidatorTest : public testing::Test {
             schema_.get(), &fn_catalog_, &type_factory_, analyzer_options_)) {}
 
  protected:
-  absl::StatusOr<std::unique_ptr<const zetasql::AnalyzerOutput>>
+  absl::StatusOr<std::unique_ptr<const googlesql::AnalyzerOutput>>
   AnalyzePGQuery(const std::string& sql) {
     analyzer_options_.CreateDefaultArenasIfNotSet();
-    ZETASQL_ASSIGN_OR_RETURN(
+    GOOGLESQL_ASSIGN_OR_RETURN(
         std::unique_ptr<postgres_translator::interfaces::PGArena> arena,
         postgres_translator::spangres::MemoryContextPGArena::Init(nullptr));
     return postgres_translator::spangres::ParseAndAnalyzePostgreSQL(
@@ -86,9 +89,9 @@ class PgChangeStreamQueryValidatorTest : public testing::Test {
             /*latest_schema=*/schema_.get()));
   }
 
-  zetasql::TypeFactory type_factory_;
+  googlesql::TypeFactory type_factory_;
 
-  zetasql::AnalyzerOptions analyzer_options_;
+  googlesql::AnalyzerOptions analyzer_options_;
 
   std::unique_ptr<const Schema> schema_;
 
@@ -96,11 +99,11 @@ class PgChangeStreamQueryValidatorTest : public testing::Test {
 
   std::unique_ptr<Catalog> catalog_;
 
-  absl::flat_hash_map<std::string, zetasql::Value> params_;
+  absl::flat_hash_map<std::string, googlesql::Value> params_;
 };
 
 TEST_F(PgChangeStreamQueryValidatorTest, ValidateArgumentLiteralsValid) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto stmt, AnalyzePGQuery(absl::Substitute(
                      "SELECT * FROM "
                      "spanner.read_json_change_stream_test_table ("
@@ -114,22 +117,22 @@ TEST_F(PgChangeStreamQueryValidatorTest, ValidateArgumentLiteralsValid) {
   };
   ASSERT_TRUE(
       validator.IsChangeStreamQuery(stmt->resolved_statement()).value());
-  ZETASQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
+  GOOGLESQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
 }
 
 TEST_F(PgChangeStreamQueryValidatorTest, ValidateArgumentParametersValid) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto stmt, AnalyzePGQuery("SELECT * FROM "
                                 "spanner.read_json_change_stream_test_table "
                                 "($1::timestamptz, "
                                 "$2::timestamptz, $3::text, "
                                 "$4, null::text[] )"));
   params_.insert(
-      {"p1", zetasql::Value::Timestamp(absl::Now() + absl::Minutes(1))});
+      {"p1", googlesql::Value::Timestamp(absl::Now() + absl::Minutes(1))});
   params_.insert(
-      {"p2", zetasql::Value::Timestamp(absl::Now() + absl::Minutes(1))});
-  params_.insert({"p3", zetasql::Value::String("test_token")});
-  params_.insert({"p4", zetasql::Value::Int64(1000)});
+      {"p2", googlesql::Value::Timestamp(absl::Now() + absl::Minutes(1))});
+  params_.insert({"p3", googlesql::Value::String("test_token")});
+  params_.insert({"p4", googlesql::Value::Int64(1000)});
   ChangeStreamQueryValidator validator{
       schema_.get(),
       absl::Now(),
@@ -137,14 +140,14 @@ TEST_F(PgChangeStreamQueryValidatorTest, ValidateArgumentParametersValid) {
   };
   ASSERT_TRUE(
       validator.IsChangeStreamQuery(stmt->resolved_statement()).value());
-  ZETASQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
+  GOOGLESQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
 }
 
 TEST_F(PgChangeStreamQueryValidatorTest,
        ValidateMetadataCreatedForValidChangeStreamQuery) {
   absl::Time start_time = absl::Now();
   absl::Time end_time = start_time + absl::Minutes(1);
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto stmt,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto stmt,
                        AnalyzePGQuery(absl::Substitute(
                            "SELECT * FROM "
                            "spanner.read_json_change_stream_test_table "
@@ -156,7 +159,7 @@ TEST_F(PgChangeStreamQueryValidatorTest,
                                        std::move(params_)};
   ASSERT_TRUE(
       validator.IsChangeStreamQuery(stmt->resolved_statement()).value());
-  ZETASQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
+  GOOGLESQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
   EXPECT_EQ(validator.change_stream_metadata().change_stream_name,
             "change_stream_test_table");
   EXPECT_EQ(validator.change_stream_metadata().heartbeat_milliseconds, 1000);
@@ -181,13 +184,15 @@ TEST_F(PgChangeStreamQueryValidatorTest,
             "_change_stream_partition_change_stream_test_table");
   EXPECT_EQ(validator.change_stream_metadata().data_table,
             "_change_stream_data_change_stream_test_table");
+  EXPECT_EQ(validator.change_stream_metadata().partition_mode,
+            kChangeStreamPartitionModeImmutableKeyRange);
   ASSERT_TRUE(validator.change_stream_metadata().is_pg);
   ASSERT_TRUE(validator.change_stream_metadata().is_change_stream_query);
 }
 
 TEST_F(PgChangeStreamQueryValidatorTest,
        ValidateMetadataCreatedForValidRegularQuery) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto stmt, AnalyzePGQuery("SELECT * FROM test_table"));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto stmt, AnalyzePGQuery("SELECT * FROM test_table"));
   ChangeStreamQueryValidator validator{schema_.get(), absl::Now(),
                                        std::move(params_)};
   ASSERT_FALSE(
@@ -196,7 +201,7 @@ TEST_F(PgChangeStreamQueryValidatorTest,
 }
 
 TEST_F(PgChangeStreamQueryValidatorTest, ValidateNullStartTimestampNonValid) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto stmt,
       AnalyzePGQuery("SELECT * FROM "
                      "spanner.read_json_change_stream_test_table ("
@@ -215,7 +220,7 @@ TEST_F(PgChangeStreamQueryValidatorTest, ValidateNullStartTimestampNonValid) {
 
 TEST_F(PgChangeStreamQueryValidatorTest,
        ValidateStartTimestampTooFarInFutureNonValid) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto stmt, AnalyzePGQuery(absl::Substitute(
                      "SELECT * FROM "
                      "spanner.read_json_change_stream_test_table ("
@@ -238,7 +243,7 @@ TEST_F(PgChangeStreamQueryValidatorTest,
 
 TEST_F(PgChangeStreamQueryValidatorTest,
        ValidateStartTimestampTooOldBeforeRetentionNonValid) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto stmt, AnalyzePGQuery(absl::Substitute(
                      "SELECT * FROM "
                      "spanner.read_json_change_stream_test_table ("
@@ -263,7 +268,7 @@ TEST_F(PgChangeStreamQueryValidatorTest,
        ValidateStartTimestampGreaterThanEndTimestampNonValid) {
   absl::Time start = absl::Now();
   absl::Time end = start - absl::Seconds(1);
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto stmt, AnalyzePGQuery(absl::Substitute(
                      "SELECT * FROM "
                      "spanner.read_json_change_stream_test_table ("
@@ -285,7 +290,7 @@ TEST_F(PgChangeStreamQueryValidatorTest,
 
 TEST_F(PgChangeStreamQueryValidatorTest,
        ValidateNullHeartbeatMillisecondsNonValid) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto stmt,
       AnalyzePGQuery(absl::Substitute(
           "SELECT * FROM "
@@ -306,7 +311,7 @@ TEST_F(PgChangeStreamQueryValidatorTest,
 
 TEST_F(PgChangeStreamQueryValidatorTest,
        ValidateHeartbeatMillisecondsTooSmallNonValid) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto stmt,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto stmt,
                        AnalyzePGQuery(absl::Substitute(
                            "SELECT * FROM "
                            "spanner.read_json_change_stream_test_table ("
@@ -328,7 +333,7 @@ TEST_F(PgChangeStreamQueryValidatorTest,
 
 TEST_F(PgChangeStreamQueryValidatorTest,
        ValidateHeartbeatMillisecondsTooLargeNonValid) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto stmt, AnalyzePGQuery(absl::Substitute(
                      "SELECT * FROM "
                      "spanner.read_json_change_stream_test_table ("
@@ -349,7 +354,7 @@ TEST_F(PgChangeStreamQueryValidatorTest,
 }
 
 TEST_F(PgChangeStreamQueryValidatorTest, ValidateNonNullReadOptionsNonValid) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto stmt,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto stmt,
                        AnalyzePGQuery(absl::Substitute(
                            "SELECT * FROM "
                            "spanner.read_json_change_stream_test_table ("
@@ -369,7 +374,7 @@ TEST_F(PgChangeStreamQueryValidatorTest, ValidateNonNullReadOptionsNonValid) {
 }
 
 TEST_F(PgChangeStreamQueryValidatorTest, ValidateScalarArgumentsNonValid) {
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto stmt,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto stmt,
                        AnalyzePGQuery(absl::Substitute(
                            "SELECT * FROM "
                            "spanner.read_json_change_stream_test_table ("
@@ -389,6 +394,149 @@ TEST_F(PgChangeStreamQueryValidatorTest, ValidateScalarArgumentsNonValid) {
                 "read_json_change_stream_test_table", 3));
 }
 
+class PgChangeStreamMutableKeyRangeQueryValidatorTest : public testing::Test {
+ public:
+  friend class Catalog;
+  PgChangeStreamMutableKeyRangeQueryValidatorTest()
+      : flag_setter_({.enable_mutable_key_range_change_stream = true}),
+        analyzer_options_(MakeGoogleSqlAnalyzerOptions(kDefaultTimeZone)),
+        schema_(test::CreateSchemaWithOneTableAndOneChangeStream(
+            &type_factory_, database_api::DatabaseDialect::POSTGRESQL,
+            /*is_mutable_key_range=*/true)),
+        fn_catalog_(&type_factory_,
+                    /*catalog_name=*/kCloudSpannerEmulatorFunctionCatalogName,
+                    /*latest_schema=*/schema_.get()),
+        catalog_(std::make_unique<Catalog>(
+            schema_.get(), &fn_catalog_, &type_factory_, analyzer_options_)) {}
+
+ protected:
+  absl::StatusOr<std::unique_ptr<const googlesql::AnalyzerOutput>>
+  AnalyzePGQuery(const std::string& sql) {
+    analyzer_options_.CreateDefaultArenasIfNotSet();
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<postgres_translator::interfaces::PGArena> arena,
+        postgres_translator::spangres::MemoryContextPGArena::Init(nullptr));
+    return postgres_translator::spangres::ParseAndAnalyzePostgreSQL(
+        sql, catalog_.get(), analyzer_options_, &type_factory_,
+        std::make_unique<FunctionCatalog>(
+            &type_factory_,
+            /*catalog_name=*/kCloudSpannerEmulatorFunctionCatalogName,
+            /*latest_schema=*/schema_.get()));
+  }
+
+  test::ScopedEmulatorFeatureFlagsSetter flag_setter_;
+  googlesql::TypeFactory type_factory_;
+  googlesql::AnalyzerOptions analyzer_options_;
+  std::unique_ptr<const Schema> schema_;
+  const FunctionCatalog fn_catalog_;
+  std::unique_ptr<Catalog> catalog_;
+  absl::flat_hash_map<std::string, googlesql::Value> params_;
+};
+
+TEST_F(PgChangeStreamMutableKeyRangeQueryValidatorTest,
+       ValidateMetadataCreatedForValidChangeStreamQuery) {
+  absl::Time start_time = absl::Now();
+  absl::Time end_time = start_time + absl::Minutes(1);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto stmt, AnalyzePGQuery(absl::Substitute(
+                     "SELECT * FROM "
+                     "spanner.read_proto_bytes_change_stream_test_table ("
+                     "'$0'::timestamptz,"
+                     "'$1'::timestamptz, 'test_token', 1000 , null::text[] )",
+                     start_time, end_time)));
+  ChangeStreamQueryValidator validator{schema_.get(), absl::Now(),
+                                       std::move(params_)};
+  ASSERT_THAT(validator.IsChangeStreamQuery(stmt->resolved_statement()),
+              IsOkAndHolds(true));
+  GOOGLESQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
+  EXPECT_EQ(validator.change_stream_metadata().change_stream_name,
+            "change_stream_test_table");
+  EXPECT_EQ(validator.change_stream_metadata().heartbeat_milliseconds, 1000);
+  EXPECT_EQ(validator.change_stream_metadata().partition_token.value(),
+            "test_token");
+  EXPECT_EQ(absl::FormatTime("%Y-%m-%dT%H:%M:%S.%fZ",
+                             validator.change_stream_metadata().start_timestamp,
+                             absl::LocalTimeZone()),
+            absl::FormatTime("%Y-%m-%dT%H:%M:%S.%fZ", start_time,
+                             absl::LocalTimeZone()));
+  EXPECT_EQ(
+      absl::FormatTime("%Y-%m-%dT%H:%M:%S.%fZ",
+                       validator.change_stream_metadata().end_timestamp.value(),
+                       absl::LocalTimeZone()),
+      absl::FormatTime("%Y-%m-%dT%H:%M:%S.%fZ", end_time,
+                       absl::LocalTimeZone()));
+  EXPECT_EQ(validator.change_stream_metadata().tvf_name,
+            "read_proto_bytes_change_stream_test_table");
+  EXPECT_EQ(validator.change_stream_metadata().partition_table,
+            "_change_stream_partition_change_stream_test_table");
+  EXPECT_EQ(validator.change_stream_metadata().data_table,
+            "_change_stream_data_change_stream_test_table");
+  EXPECT_EQ(validator.change_stream_metadata().partition_mode,
+            kChangeStreamPartitionModeMutableKeyRange);
+  ASSERT_TRUE(validator.change_stream_metadata().is_pg);
+  ASSERT_TRUE(validator.change_stream_metadata().is_change_stream_query);
+}
+
+TEST_F(PgChangeStreamMutableKeyRangeQueryValidatorTest,
+       ValidateInvalidChangeStreamTvfName) {
+  absl::Time start_time = absl::Now();
+  absl::Time end_time = start_time + absl::Minutes(1);
+  EXPECT_FALSE(AnalyzePGQuery(
+                   absl::Substitute(
+                       "SELECT * FROM "
+                       "spanner.read_proto_bytes_non_existent_stream ("
+                       "'$0'::timestamptz,"
+                       "'$1'::timestamptz, 'test_token', 1000 , null::text[] )",
+                       start_time, end_time))
+                   .ok());
+}
+
+TEST_F(PgChangeStreamMutableKeyRangeQueryValidatorTest,
+       ValidateEmptyEndTimestampNonValid) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto stmt, AnalyzePGQuery(absl::Substitute(
+                     "SELECT * FROM "
+                     "spanner.read_proto_bytes_change_stream_test_table ("
+                     "'$0'::timestamptz,"
+                     "null::timestamptz, 'test_token', 1000 , null::text[] )",
+                     absl::Now())));
+  ChangeStreamQueryValidator validator{
+      schema_.get(),
+      absl::Now(),
+      params_,
+  };
+  ASSERT_THAT(validator.IsChangeStreamQuery(stmt->resolved_statement()),
+              IsOkAndHolds(true));
+  EXPECT_EQ(stmt->resolved_statement()->Accept(&validator),
+            error::InvalidChangeStreamTvfArgumentNullEndTimestamp());
+}
+
+TEST_F(PgChangeStreamMutableKeyRangeQueryValidatorTest,
+       ValidateEndTimestampTooFarInFutureNonValid) {
+  absl::Time query_start_time = absl::Now();
+  absl::Time start_time = query_start_time;
+  absl::Time end_time = query_start_time + absl::Minutes(31);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto stmt, AnalyzePGQuery(absl::Substitute(
+                     "SELECT * FROM "
+                     "spanner.read_proto_bytes_change_stream_test_table ("
+                     "'$0'::timestamptz,"
+                     "'$1'::timestamptz, 'test_token', 1000 , null::text[] )",
+                     start_time, end_time)));
+  ChangeStreamQueryValidator validator{
+      schema_.get(),
+      query_start_time,
+      params_,
+  };
+  ASSERT_THAT(validator.IsChangeStreamQuery(stmt->resolved_statement()),
+              IsOkAndHolds(true));
+  EXPECT_THAT(
+      stmt->resolved_statement()->Accept(&validator),
+      StatusIs(absl::StatusCode::kOutOfRange,
+               testing::HasSubstr(
+                   "Specified end_timestamp is too far in the future.")));
+}
+
 class PgChangeStreamQueryValidatorIllegalTVFTest
     : public PgChangeStreamQueryValidatorTest,
       public testing::WithParamInterface<std::string> {};
@@ -400,7 +548,7 @@ TEST_P(PgChangeStreamQueryValidatorIllegalTVFTest,
       absl::Now(),
       params_,
   };
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto stmt, AnalyzePGQuery(GetParam()));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto stmt, AnalyzePGQuery(GetParam()));
   ASSERT_TRUE(
       validator.IsChangeStreamQuery(stmt->resolved_statement()).value());
   EXPECT_EQ(stmt->resolved_statement()->Accept(&validator),

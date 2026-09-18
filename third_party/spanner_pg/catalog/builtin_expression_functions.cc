@@ -61,7 +61,7 @@ void AddArrayFunctions(
        "pg.array_slice"});
 
   // IMPORTANT NOTE: This mapping only applies when the array contains non-Const
-  // element expressions (matches ZetaSQL behavior). Arrays of all Const
+  // element expressions (matches GoogleSQL behavior). Arrays of all Const
   // elements are transformed to ResolvedLiterals.
   // make_array is the general-form array constructor, used in cases where the
   // array constant has non-const element expressions (Var, Expr, etc.).
@@ -119,6 +119,8 @@ void AddComparisonFunctions(
                         /*use_or=*/true,
                         /*comparator_type=*/"="),
                     "$in"});
+  functions.insert(
+      {PostgresExprIdentifier::Expr(T_DistinctExpr), "$is_distinct_from"});
 }
 
 void AddLeastGreatestFunctions(

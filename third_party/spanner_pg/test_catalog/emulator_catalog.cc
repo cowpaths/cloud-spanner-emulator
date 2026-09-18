@@ -38,13 +38,13 @@
 #include <utility>
 #include <vector>
 
-#include "zetasql/public/analyzer_options.h"
-#include "zetasql/public/catalog.h"
-#include "zetasql/public/function_signature.h"
-#include "zetasql/public/options.pb.h"
-#include "zetasql/public/type.h"
-#include "zetasql/public/value.h"
-#include "zetasql/base/no_destructor.h"
+#include "googlesql/public/analyzer_options.h"
+#include "googlesql/public/catalog.h"
+#include "googlesql/public/function_signature.h"
+#include "googlesql/public/options.pb.h"
+#include "googlesql/public/type.h"
+#include "googlesql/public/value.h"
+#include "googlesql/base/no_destructor.h"
 #include "absl/log/check.h"
 #include "absl/status/statusor.h"
 #include "absl/time/time.h"
@@ -53,17 +53,19 @@
 #include "backend/schema/builders/change_stream_builder.h"
 #include "backend/schema/builders/column_builder.h"
 #include "backend/schema/builders/named_schema_builder.h"
+#include "backend/schema/builders/sequence_builder.h"
 #include "backend/schema/builders/table_builder.h"
 #include "backend/schema/builders/udf_builder.h"
 #include "backend/schema/catalog/column.h"
 #include "backend/schema/catalog/named_schema.h"
 #include "backend/schema/catalog/schema.h"
+#include "backend/schema/catalog/sequence.h"
 #include "backend/schema/catalog/table.h"
 #include "backend/schema/catalog/udf.h"
 #include "backend/schema/graph/schema_graph.h"
 #include "third_party/spanner_pg/catalog/spangres_type.h"
 #include "third_party/spanner_pg/catalog/type.h"
-#include "zetasql/base/status_macros.h"
+#include "googlesql/base/status_macros.h"
 
 using google::spanner::emulator::backend::Catalog;
 using google::spanner::emulator::backend::ChangeStream;
@@ -75,6 +77,7 @@ using google::spanner::emulator::backend::KeyColumn;
 using google::spanner::emulator::backend::NamedSchema;
 using google::spanner::emulator::backend::OwningSchema;
 using google::spanner::emulator::backend::SchemaGraph;
+using google::spanner::emulator::backend::Sequence;
 using google::spanner::emulator::backend::Table;
 using google::spanner::emulator::backend::Udf;
 
@@ -94,7 +97,7 @@ Table::Builder table_builder(const std::string& name) {
 }
 
 Column::Builder column_builder(const std::string& name, const Table* table,
-                               const zetasql::Type* type) {
+                               const googlesql::Type* type) {
   Column::Builder c;
   c.set_name(name).set_id(name).set_type(type).set_table(table);
   return c;
@@ -112,6 +115,17 @@ ChangeStream::Builder change_stream_builder(const std::string& name) {
   return c;
 }
 
+Sequence::Builder sequence_builder(const std::string& name) {
+  Sequence::Builder s;
+  s.set_name(name)
+      .set_id(name)
+      .set_postgresql_oid(kNextPostgresOid++)
+      .set_sequence_kind(Sequence::SequenceKind::BIT_REVERSED_POSITIVE)
+      .set_start_with_counter(1);
+  ;
+  return s;
+}
+
 NamedSchema::Builder named_schema_builder(const std::string& name) {
   NamedSchema::Builder b;
   b.set_name(name).set_id(name).set_postgresql_oid(kNextPostgresOid++);
@@ -121,19 +135,19 @@ NamedSchema::Builder named_schema_builder(const std::string& name) {
 // Gets the array type given the element type in the array. Since the types in
 // type_factory are static, they can live longer than the lifetime of the
 // type_factory.
-absl::StatusOr<const zetasql::Type*> get_array_type(
-    zetasql::TypeFactory& type_factory,
-    const zetasql::Type* array_element_type) {
-  const zetasql::Type* array_type;
-  ZETASQL_RETURN_IF_ERROR(type_factory.MakeArrayType(array_element_type, &array_type));
+absl::StatusOr<const googlesql::Type*> get_array_type(
+    googlesql::TypeFactory& type_factory,
+    const googlesql::Type* array_element_type) {
+  const googlesql::Type* array_type;
+  GOOGLESQL_RETURN_IF_ERROR(type_factory.MakeArrayType(array_element_type, &array_type));
   return array_type;
 }
 
 void create_key_value_table(const std::string table_name,
                             const std::string key_column_name,
-                            const zetasql::Type * key_column_type,
+                            const googlesql::Type * key_column_type,
                             const std::string value_column_name,
-                            const zetasql::Type * value_column_type,
+                            const googlesql::Type * value_column_type,
                             std::optional<int64_t> value_column_max_length,
                             SchemaGraph* graph) {
   // The DDL template looks like:
@@ -163,7 +177,7 @@ void create_key_value_table(const std::string table_name,
   graph->Add(std::move(table));
 }
 
-void create_primitive_types_table(zetasql::TypeFactory& type_factory,
+void create_primitive_types_table(googlesql::TypeFactory& type_factory,
                                   SchemaGraph* graph) {
   // R"(
   //     CREATE TABLE AllSpangresTypes (
@@ -261,7 +275,7 @@ void create_primitive_types_table(zetasql::TypeFactory& type_factory,
   graph->Add(std::move(table));
 }
 
-void create_array_types_table(zetasql::TypeFactory& type_factory,
+void create_array_types_table(googlesql::TypeFactory& type_factory,
                                   SchemaGraph* graph) {
   // R"(
   //     CREATE TABLE ArrayTypes (
@@ -283,34 +297,34 @@ void create_array_types_table(zetasql::TypeFactory& type_factory,
   Table::Builder tb = table_builder("ArrayTypes");
   std::unique_ptr<const Column> key_column =
       column_builder("key", tb.get(), type_factory.get_int64()).build();
-  const zetasql::Type* bool_array_type =
+  const googlesql::Type* bool_array_type =
       get_array_type(type_factory, type_factory.get_bool()).value();
   std::unique_ptr<const Column> bool_array =
       column_builder("bool_array", tb.get(), bool_array_type).build();
-  const zetasql::Type* int_array_type =
+  const googlesql::Type* int_array_type =
       get_array_type(type_factory, type_factory.get_int64()).value();
   std::unique_ptr<const Column> int_array =
       column_builder("int_array", tb.get(), int_array_type).build();
-  const zetasql::Type* double_array_type =
+  const googlesql::Type* double_array_type =
       get_array_type(type_factory, type_factory.get_double()).value();
   std::unique_ptr<const Column> double_array =
       column_builder("double_array", tb.get(), double_array_type).build();
-  const zetasql::Type* string_array_type =
+  const googlesql::Type* string_array_type =
       get_array_type(type_factory, type_factory.get_string()).value();
   std::unique_ptr<const Column> string_array =
       column_builder("string_array", tb.get(), string_array_type)
           .set_declared_max_length(20)
           .build();
-  const zetasql::Type* bytes_array_type =
+  const googlesql::Type* bytes_array_type =
       get_array_type(type_factory, type_factory.get_bytes()).value();
   std::unique_ptr<const Column> bytes_array =
       column_builder("bytes_array", tb.get(), bytes_array_type)
           .build();
-  const zetasql::Type* timestamp_array_type =
+  const googlesql::Type* timestamp_array_type =
       get_array_type(type_factory, type_factory.get_timestamp()).value();
   std::unique_ptr<const Column> timestamp_array =
       column_builder("timestamp_array", tb.get(), timestamp_array_type).build();
-  const zetasql::Type* date_array_type =
+  const googlesql::Type* date_array_type =
       get_array_type(type_factory, type_factory.get_date()).value();
   std::unique_ptr<const Column> date_array =
       column_builder("date_array", tb.get(), date_array_type).build();
@@ -330,19 +344,19 @@ void create_array_types_table(zetasql::TypeFactory& type_factory,
                          ->mapped_type())
           .build();
 
-  const zetasql::Type* float_array_type =
+  const googlesql::Type* float_array_type =
       get_array_type(type_factory, type_factory.get_float()).value();
   std::unique_ptr<const Column> float_array =
       column_builder("float_array", tb.get(), float_array_type).build();
 
-  const zetasql::Type* tokenlist_array_type =
+  const googlesql::Type* tokenlist_array_type =
       get_array_type(type_factory, type_factory.get_tokenlist()).value();
   std::unique_ptr<const Column> tokenlist_array =
       column_builder("tokenlist_array", tb.get(), tokenlist_array_type)
           .set_hidden(true)
           .build();
 
-  const zetasql::Type* uuid_array_type =
+  const googlesql::Type* uuid_array_type =
       get_array_type(type_factory, type_factory.get_uuid()).value();
   std::unique_ptr<const Column> uuid_array =
       column_builder("uuid_array", tb.get(), uuid_array_type).build();
@@ -382,7 +396,7 @@ void create_array_types_table(zetasql::TypeFactory& type_factory,
   graph->Add(std::move(table));
 }
 
-void create_withpseudo_table(zetasql::TypeFactory& type_factory,
+void create_withpseudo_table(googlesql::TypeFactory& type_factory,
                              SchemaGraph* graph) {
   // R"(
   //     CREATE TABLE withpseudo (
@@ -422,7 +436,7 @@ void create_withpseudo_table(zetasql::TypeFactory& type_factory,
   graph->Add(std::move(table));
 }
 
-void create_generated_columns_table(zetasql::TypeFactory& type_factory,
+void create_generated_columns_table(googlesql::TypeFactory& type_factory,
                                     SchemaGraph* graph) {
   // R"(
   //     CREATE TABLE generated_columns(
@@ -456,7 +470,7 @@ void create_generated_columns_table(zetasql::TypeFactory& type_factory,
 }
 
 void create_many_columns_table(const std::string table_name,
-                               zetasql::TypeFactory& type_factory,
+                               googlesql::TypeFactory& type_factory,
                                SchemaGraph* graph) {
   // R"(
   //    CREATE TABLE [table_name](
@@ -497,7 +511,7 @@ void create_many_columns_table(const std::string table_name,
   graph->Add(std::move(table));
 }
 
-void create_ann_vector_base_table(zetasql::TypeFactory& type_factory,
+void create_ann_vector_base_table(googlesql::TypeFactory& type_factory,
                                   SchemaGraph* graph) {
   // R"(
   //    CREATE TABLE annvectorbase (
@@ -517,7 +531,7 @@ void create_ann_vector_base_table(zetasql::TypeFactory& type_factory,
       column_builder("a1", tb.get(), type_factory.get_int64()).build();
   std::unique_ptr<const Column> a2_column =
       column_builder("a2", tb.get(), type_factory.get_int64()).build();
-  const zetasql::Type* float_array_type =
+  const googlesql::Type* float_array_type =
       get_array_type(type_factory, type_factory.get_float()).value();
   std::unique_ptr<const Column> embedding_column =
       column_builder("embedding", tb.get(), float_array_type)
@@ -538,7 +552,7 @@ void create_ann_vector_base_table(zetasql::TypeFactory& type_factory,
   graph->Add(std::move(table));
 }
 
-void create_change_stream(zetasql::TypeFactory& type_factory,
+void create_change_stream(googlesql::TypeFactory& type_factory,
                           SchemaGraph* graph) {
   // R"(
   //     CREATE CHANGE STREAM keyvalue_change_stream FOR keyvalue(value)
@@ -551,38 +565,64 @@ void create_change_stream(zetasql::TypeFactory& type_factory,
   graph->Add(std::move(change_stream));
 }
 
-void create_udf(zetasql::TypeFactory& type_factory, SchemaGraph* graph) {
+void create_sequences(SchemaGraph* graph) {
+  // R"(
+  //     CREATE SEQUENCE myseq BIT_REVERSED_POSITIVE;
+  //   )",
+  {
+    Sequence::Builder sb = sequence_builder("myseq");
+    std::unique_ptr<const Sequence> sequence = sb.build();
+    graph->Add(std::move(sequence));
+  }
+  // R"(
+  //     CREATE SCHEMA Seq_Schema;
+  //     CREATE SEQUENCE Seq_Schema.Seq BIT_REVERSED_POSITIVE;
+  //   )",
+  {
+    std::unique_ptr<const NamedSchema> seq_schema =
+        named_schema_builder("Seq_Schema").build();
+    graph->Add(std::move(seq_schema));
+
+    Sequence::Builder sb = sequence_builder("Seq_Schema.Seq");
+    std::unique_ptr<const Sequence> sequence = sb.build();
+    graph->Add(std::move(sequence));
+  }
+}
+
+void create_udf(googlesql::TypeFactory& type_factory, SchemaGraph* graph) {
   // R"(
   //     CREATE FUNCTION foo_udf() RETURNS INT64 AS (1);
   //   )",
   {
-    auto function_signature = std::make_unique<zetasql::FunctionSignature>(
+    auto function_signature = std::make_unique<googlesql::FunctionSignature>(
         type_factory.get_int64(),
-        std::vector<zetasql::FunctionArgumentType>{},
+        std::vector<googlesql::FunctionArgumentType>{},
         /*context_id=*/-1);
     Udf::Builder builder;
     std::unique_ptr<const Udf> function =
         builder.set_name("foo_udf")
+            .set_postgresql_oid(kNextPostgresOid++)
             .set_signature(std::move(function_signature))
             .set_body_origin("1")
             .build();
     graph->Add(std::move(function));
   }
   // R"(
-  //     CREATE FUNCTION udf_schema.bar_udf() RETURNS INT64 AS (2);
+  //     CREATE FUNCTION "Udf_Schema"."Bar_Udf"() RETURNS INT64 AS (2);
   //   )",
   {
     std::unique_ptr<const NamedSchema> udf_schema =
-        named_schema_builder("udf_schema").build();
+        named_schema_builder("Udf_Schema").build();
     graph->Add(std::move(udf_schema));
 
-    auto function_signature = std::make_unique<zetasql::FunctionSignature>(
+    auto function_signature = std::make_unique<googlesql::FunctionSignature>(
         type_factory.get_int64(),
-        std::vector<zetasql::FunctionArgumentType>{},
+        std::vector<googlesql::FunctionArgumentType>{},
         /*context_id=*/-1);
     Udf::Builder builder;
     std::unique_ptr<const Udf> function =
-        builder.set_name("udf_schema.bar_udf")
+        builder.set_name("Udf_Schema.Bar_Udf")
+            .set_postgresql_oid(kNextPostgresOid++)
             .set_signature(std::move(function_signature))
             .set_body_origin("2")
             .build();
@@ -593,21 +633,22 @@ void create_udf(zetasql::TypeFactory& type_factory, SchemaGraph* graph) {
   // RETURNS INT64 AS (a + b);
   //   )",
   {
-    auto function_signature = std::make_unique<zetasql::FunctionSignature>(
+    auto function_signature = std::make_unique<googlesql::FunctionSignature>(
         type_factory.get_int64(),
-        std::vector<zetasql::FunctionArgumentType>{
-            zetasql::FunctionArgumentType(
+        std::vector<googlesql::FunctionArgumentType>{
+            googlesql::FunctionArgumentType(
                 type_factory.get_int64(),
-                zetasql::FunctionArgumentTypeOptions().set_argument_name(
-                    "a", zetasql::kPositionalOrNamed)),
-            zetasql::FunctionArgumentType(
+                googlesql::FunctionArgumentTypeOptions().set_argument_name(
+                    "a", googlesql::kPositionalOrNamed)),
+            googlesql::FunctionArgumentType(
                 type_factory.get_int64(),
-                zetasql::FunctionArgumentTypeOptions().set_argument_name(
-                    "b", zetasql::kPositionalOrNamed))},
+                googlesql::FunctionArgumentTypeOptions().set_argument_name(
+                    "b", googlesql::kPositionalOrNamed))},
         /*context_id=*/-1);
     Udf::Builder builder;
     std::unique_ptr<const Udf> function =
         builder.set_name("foo_udf_with_inputs")
+            .set_postgresql_oid(kNextPostgresOid++)
             .set_signature(std::move(function_signature))
             .set_body_origin("a + b")
             .build();
@@ -618,25 +659,26 @@ void create_udf(zetasql::TypeFactory& type_factory, SchemaGraph* graph) {
   // INT64 DEFAULT 2) RETURNS INT64 AS (a + b);
   //   )",
   {
-    auto function_signature = std::make_unique<zetasql::FunctionSignature>(
+    auto function_signature = std::make_unique<googlesql::FunctionSignature>(
         type_factory.get_int64(),
-        std::vector<zetasql::FunctionArgumentType>{
-            zetasql::FunctionArgumentType(
+        std::vector<googlesql::FunctionArgumentType>{
+            googlesql::FunctionArgumentType(
                 type_factory.get_int64(),
-                zetasql::FunctionArgumentTypeOptions()
-                    .set_argument_name("a", zetasql::kPositionalOrNamed)
-                    .set_cardinality(zetasql::FunctionEnums::OPTIONAL)
-                    .set_default(zetasql::values::Int64(1))),
-            zetasql::FunctionArgumentType(
+                googlesql::FunctionArgumentTypeOptions()
+                    .set_argument_name("a", googlesql::kPositionalOrNamed)
+                    .set_cardinality(googlesql::FunctionEnums::OPTIONAL)
+                    .set_default(googlesql::values::Int64(1))),
+            googlesql::FunctionArgumentType(
                 type_factory.get_int64(),
-                zetasql::FunctionArgumentTypeOptions()
-                    .set_argument_name("b", zetasql::kPositionalOrNamed)
-                    .set_cardinality(zetasql::FunctionEnums::OPTIONAL)
-                    .set_default(zetasql::values::Int64(2)))},
+                googlesql::FunctionArgumentTypeOptions()
+                    .set_argument_name("b", googlesql::kPositionalOrNamed)
+                    .set_cardinality(googlesql::FunctionEnums::OPTIONAL)
+                    .set_default(googlesql::values::Int64(2)))},
         /*context_id=*/-1);
     Udf::Builder builder;
     std::unique_ptr<const Udf> function =
         builder.set_name("foo_udf_with_default_args")
+            .set_postgresql_oid(kNextPostgresOid++)
             .set_signature(std::move(function_signature))
             .set_body_origin("a + b")
             .build();
@@ -650,25 +692,26 @@ void create_udf(zetasql::TypeFactory& type_factory, SchemaGraph* graph) {
   // );
   //   )",
   {
-    auto function_signature = std::make_unique<zetasql::FunctionSignature>(
+    auto function_signature = std::make_unique<googlesql::FunctionSignature>(
         get_array_type(type_factory, type_factory.get_int64()).value(),
-        std::vector<zetasql::FunctionArgumentType>{
-            zetasql::FunctionArgumentType(
+        std::vector<googlesql::FunctionArgumentType>{
+            googlesql::FunctionArgumentType(
                 type_factory.get_int64(),
-                zetasql::FunctionArgumentTypeOptions()
-                    .set_argument_name("start_v", zetasql::kPositionalOrNamed)
-                    .set_cardinality(zetasql::FunctionEnums::OPTIONAL)
-                    .set_default(zetasql::values::Int64(1))),
-            zetasql::FunctionArgumentType(
+                googlesql::FunctionArgumentTypeOptions()
+                    .set_argument_name("start_v", googlesql::kPositionalOrNamed)
+                    .set_cardinality(googlesql::FunctionEnums::OPTIONAL)
+                    .set_default(googlesql::values::Int64(1))),
+            googlesql::FunctionArgumentType(
                 type_factory.get_int64(),
-                zetasql::FunctionArgumentTypeOptions()
-                    .set_argument_name("end_v", zetasql::kPositionalOrNamed)
-                    .set_cardinality(zetasql::FunctionEnums::OPTIONAL)
-                    .set_default(zetasql::values::Int64(10)))},
+                googlesql::FunctionArgumentTypeOptions()
+                    .set_argument_name("end_v", googlesql::kPositionalOrNamed)
+                    .set_cardinality(googlesql::FunctionEnums::OPTIONAL)
+                    .set_default(googlesql::values::Int64(10)))},
         /*context_id=*/-1);
     Udf::Builder builder;
     std::unique_ptr<const Udf> function =
         builder.set_name("generate_array_udf")
+            .set_postgresql_oid(kNextPostgresOid++)
             .set_signature(std::move(function_signature))
             .set_body_origin(
                 "(SELECT ARRAY_AGG(a_1) AS a_2 FROM UNNEST(PG.GENERATE_ARRAY("
@@ -679,7 +722,7 @@ void create_udf(zetasql::TypeFactory& type_factory, SchemaGraph* graph) {
 }
 
 std::unique_ptr<const OwningSchema> CreateSchema(
-    zetasql::TypeFactory& type_factory) {
+    googlesql::TypeFactory& type_factory) {
   auto graph = std::make_unique<SchemaGraph>();
 
   // Basic key, value int64_t,string table.
@@ -774,43 +817,46 @@ std::unique_ptr<const OwningSchema> CreateSchema(
 
   create_ann_vector_base_table(type_factory, graph.get());
 
+  // Simple Sequences
+  create_sequences(graph.get());
+
   return std::make_unique<const OwningSchema>(
       std::move(graph),
       google::spanner::emulator::backend::database_api::DatabaseDialect::
           POSTGRESQL);
 }
 
-zetasql::LanguageOptions MakeGoogleSqlLanguageOptions() {
-  zetasql::LanguageOptions options;
+googlesql::LanguageOptions MakeGoogleSqlLanguageOptions() {
+  googlesql::LanguageOptions options;
 
-  options.set_name_resolution_mode(zetasql::NAME_RESOLUTION_DEFAULT);
-  options.set_product_mode(zetasql::PRODUCT_EXTERNAL);
+  options.set_name_resolution_mode(googlesql::NAME_RESOLUTION_DEFAULT);
+  options.set_product_mode(googlesql::PRODUCT_EXTERNAL);
   options.SetEnabledLanguageFeatures({
-      zetasql::FEATURE_EXTENDED_TYPES,
-      zetasql::FEATURE_NAMED_ARGUMENTS,
-      zetasql::FEATURE_NUMERIC_TYPE,
-      zetasql::FEATURE_TABLESAMPLE,
-      zetasql::FEATURE_TIMESTAMP_NANOS,
-      zetasql::FEATURE_HAVING_IN_AGGREGATE,
-      zetasql::FEATURE_NULL_HANDLING_MODIFIER_IN_AGGREGATE,
-      zetasql::FEATURE_ORDER_BY_COLLATE,
-      zetasql::FEATURE_SELECT_STAR_EXCEPT_REPLACE,
-      zetasql::FEATURE_SAFE_FUNCTION_CALL,
-      zetasql::FEATURE_JSON_TYPE,
-      zetasql::FEATURE_JSON_ARRAY_FUNCTIONS,
-      zetasql::FEATURE_JSON_STRICT_NUMBER_PARSING,
-      zetasql::FEATURE_WITH_EXPRESSION,
-      zetasql::FEATURE_ENABLE_FLOAT_DISTANCE_FUNCTIONS,
-      zetasql::FEATURE_DOT_PRODUCT,
-      zetasql::FEATURE_INTERVAL_TYPE,
-      zetasql::FEATURE_UUID_TYPE,
+      googlesql::FEATURE_EXTENDED_TYPES,
+      googlesql::FEATURE_NAMED_ARGUMENTS,
+      googlesql::FEATURE_NUMERIC_TYPE,
+      googlesql::FEATURE_TABLESAMPLE,
+      googlesql::FEATURE_TIMESTAMP_NANOS,
+      googlesql::FEATURE_HAVING_IN_AGGREGATE,
+      googlesql::FEATURE_NULL_HANDLING_MODIFIER_IN_AGGREGATE,
+      googlesql::FEATURE_ORDER_BY_COLLATE,
+      googlesql::FEATURE_SELECT_STAR_EXCEPT_REPLACE,
+      googlesql::FEATURE_SAFE_FUNCTION_CALL,
+      googlesql::FEATURE_JSON_TYPE,
+      googlesql::FEATURE_JSON_ARRAY_FUNCTIONS,
+      googlesql::FEATURE_JSON_STRICT_NUMBER_PARSING,
+      googlesql::FEATURE_WITH_EXPRESSION,
+      googlesql::FEATURE_ENABLE_FLOAT_DISTANCE_FUNCTIONS,
+      googlesql::FEATURE_DOT_PRODUCT,
+      googlesql::FEATURE_INTERVAL_TYPE,
+      googlesql::FEATURE_UUID_TYPE,
   });
-  options.EnableLanguageFeature(zetasql::FEATURE_DML_RETURNING);
+  options.EnableLanguageFeature(googlesql::FEATURE_DML_RETURNING);
   options.SetSupportedStatementKinds({
-      zetasql::RESOLVED_QUERY_STMT,
-      zetasql::RESOLVED_INSERT_STMT,
-      zetasql::RESOLVED_UPDATE_STMT,
-      zetasql::RESOLVED_DELETE_STMT,
+      googlesql::RESOLVED_QUERY_STMT,
+      googlesql::RESOLVED_INSERT_STMT,
+      googlesql::RESOLVED_UPDATE_STMT,
+      googlesql::RESOLVED_DELETE_STMT,
   });
 
   return options;
@@ -818,14 +864,14 @@ zetasql::LanguageOptions MakeGoogleSqlLanguageOptions() {
 
 }  // namespace
 
-std::unique_ptr<zetasql::EnumerableCatalog> GetEmulatorCatalog() {
+std::unique_ptr<googlesql::EnumerableCatalog> GetEmulatorCatalog() {
   // Need to statically allocate the unique_ptrs since the callers of this
   // function keep a static unique_ptr of the emulator catalog returned by this
   // function.
   static std::unique_ptr<const OwningSchema> schema =
       CreateSchema(*GetTypeFactory());
   static auto function_catalog =
-      zetasql_base::NoDestructor<std::unique_ptr<FunctionCatalog>>(
+      googlesql_base::NoDestructor<std::unique_ptr<FunctionCatalog>>(
           std::make_unique<FunctionCatalog>(
               GetTypeFactory(),
               /*catalog_name=*/kCloudSpannerEmulatorFunctionCatalogName,
@@ -834,13 +880,13 @@ std::unique_ptr<zetasql::EnumerableCatalog> GetEmulatorCatalog() {
                                    GetTypeFactory());
 }
 
-zetasql::AnalyzerOptions GetPGEmulatorTestAnalyzerOptions() {
-  zetasql::AnalyzerOptions options;
+googlesql::AnalyzerOptions GetPGEmulatorTestAnalyzerOptions() {
+  googlesql::AnalyzerOptions options;
   absl::TimeZone time_zone;
   ABSL_CHECK(absl::LoadTimeZone("America/Los_Angeles", &time_zone));
   options.set_default_time_zone(time_zone);
   options.set_error_message_mode(
-      zetasql::AnalyzerOptions::ERROR_MESSAGE_MULTI_LINE_WITH_CARET);
+      googlesql::AnalyzerOptions::ERROR_MESSAGE_MULTI_LINE_WITH_CARET);
   options.set_prune_unused_columns(true);
   options.set_language(MakeGoogleSqlLanguageOptions());
   options.CreateDefaultArenasIfNotSet();

@@ -17,7 +17,7 @@
 #include "common/feature_flags.h"
 
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "tests/common/scoped_feature_flags_setter.h"
 
@@ -156,6 +156,21 @@ TEST(EmulatorFeatureFlags, HiddenColumnFlag) {
   }
 
   EXPECT_TRUE(features.flags().enable_hidden_column);
+}
+
+TEST(EmulatorFeatureFlags, MutableKeyRangeChangeStreamFlag) {
+  const EmulatorFeatureFlags& features = EmulatorFeatureFlags::instance();
+
+  EXPECT_TRUE(features.flags().enable_mutable_key_range_change_stream);
+
+  {
+    EmulatorFeatureFlags::Flags flags;
+    flags.enable_mutable_key_range_change_stream = false;
+    test::ScopedEmulatorFeatureFlagsSetter setter(flags);
+    EXPECT_FALSE(features.flags().enable_mutable_key_range_change_stream);
+  }
+
+  EXPECT_TRUE(features.flags().enable_mutable_key_range_change_stream);
 }
 
 }  // namespace

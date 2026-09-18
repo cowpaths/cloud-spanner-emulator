@@ -16,11 +16,13 @@
 
 #include <algorithm>
 #include <csignal>
+#include <cstdlib>
 #include <memory>
 
 #include "absl/flags/parse.h"
 #include "absl/flags/usage.h"
-#include "zetasql/base/logging.h"
+#include "absl/log/log.h"
+#include "googlesql/base/logging.h"
 #include "absl/strings/str_cat.h"
 #include "common/config.h"
 #include "frontend/server/server.h"
@@ -68,6 +70,7 @@ int main(int argc, char** argv) {
 
   // Start the emulator gRPC server.
   absl::ParseCommandLine(argc, argv);
+
   Server::Options options;
   options.server_address = google::spanner::emulator::config::grpc_host_port();
   options.data_dir = google::spanner::emulator::config::data_dir();

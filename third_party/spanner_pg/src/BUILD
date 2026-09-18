@@ -14,7 +14,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 filegroup(
     name = "tools_perfhash",
@@ -91,7 +91,6 @@ filegroup(
         "bin/pg_upgrade/parallel.c",
         "bin/pg_upgrade/pg_upgrade.c",
         "bin/pg_upgrade/pg_upgrade.h",
-        "bin/pg_upgrade/relfilenode.c",
         "bin/pg_upgrade/server.c",
         "bin/pg_upgrade/tablespace.c",
         "bin/pg_upgrade/util.c",

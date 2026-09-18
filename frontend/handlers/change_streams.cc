@@ -32,6 +32,7 @@
 #include "backend/access/read.h"
 #include "backend/query/change_stream/change_stream_query_validator.h"
 #include "backend/query/query_engine.h"
+#include "backend/schema/catalog/change_stream.h"
 #include "backend/schema/catalog/schema.h"
 #include "common/clock.h"
 #include "common/errors.h"
@@ -41,8 +42,8 @@
 #include "frontend/entities/session.h"
 #include "frontend/entities/transaction.h"
 #include "frontend/server/handler.h"
-#include "zetasql/base/ret_check.h"
-#include "zetasql/base/status_macros.h"
+#include "googlesql/base/ret_check.h"
+#include "googlesql/base/status_macros.h"
 
 ABSL_FLAG(bool, cloud_spanner_emulator_test_with_fake_partition_table, false,
           "TEST ONLY. Set to true to enable querying against mocked change "
@@ -94,10 +95,10 @@ absl::StatusOr<absl::Duration> TryGetChangeStreamRetentionPeriod(
   txn_options.mutable_read_only()->set_return_read_timestamp(false);
   // If the user provided tvf start time is past now, wait until this future
   // time to perform a read on partition token end time.
-  ZETASQL_ASSIGN_OR_RETURN(
+  GOOGLESQL_ASSIGN_OR_RETURN(
       *txn_options.mutable_read_only()->mutable_min_read_timestamp(),
       TimestampToProto(read_ts));
-  ZETASQL_ASSIGN_OR_RETURN(auto txn, session->CreateSingleUseTransaction(txn_options));
+  GOOGLESQL_ASSIGN_OR_RETURN(auto txn, session->CreateSingleUseTransaction(txn_options));
   auto change_stream = txn->schema()->FindChangeStream(change_stream_name);
   if (change_stream != nullptr) {
     return absl::Seconds(change_stream->parsed_retention_period());
@@ -138,22 +139,43 @@ absl::Status ChangeStreamsHandler::ProcessDataChangeRecordsAndStreamBack(
     absl::Time* last_record_time,
     ServerStream<spanner_api::PartialResultSet>* stream) {
   std::vector<spanner_api::PartialResultSet> responses;
+  const bool mutable_key_range =
+      metadata().partition_mode ==
+      backend::kChangeStreamPartitionModeMutableKeyRange;
   if (IsQueryResultEmpty(result) && expect_heartbeat) {
-    ZETASQL_ASSIGN_OR_RETURN(
-        responses,
-        metadata().is_pg
-            ? ConvertHeartbeatTimestampToJson(scan_end, metadata().tvf_name,
-                                              expect_metadata)
-            : ConvertHeartbeatTimestampToStruct(scan_end, expect_metadata));
+    if (metadata().is_pg) {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          responses, mutable_key_range
+                         ? ConvertHeartbeatTimestampToBytes(
+                               scan_end, metadata().tvf_name, expect_metadata)
+                         : ConvertHeartbeatTimestampToJson(
+                               scan_end, metadata().tvf_name, expect_metadata));
+    } else {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          responses,
+          mutable_key_range
+              ? ConvertHeartbeatTimestampToProto(scan_end, expect_metadata)
+              : ConvertHeartbeatTimestampToStruct(scan_end, expect_metadata));
+    }
     expect_metadata = false;
     *last_record_time = scan_end;
   } else if (!IsQueryResultEmpty(result)) {
-    ZETASQL_ASSIGN_OR_RETURN(responses, metadata().is_pg
-                                    ? ConvertDataTableRowCursorToJson(
-                                          result.rows.get(),
-                                          metadata().tvf_name, expect_metadata)
-                                    : ConvertDataTableRowCursorToStruct(
-                                          result.rows.get(), expect_metadata));
+    if (metadata().is_pg) {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          responses,
+          mutable_key_range
+              ? ConvertDataTableRowCursorToBytes(
+                    result.rows.get(), metadata().tvf_name, expect_metadata)
+              : ConvertDataTableRowCursorToJson(
+                    result.rows.get(), metadata().tvf_name, expect_metadata));
+    } else {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          responses, mutable_key_range
+                         ? ConvertDataTableRowCursorToProto(result.rows.get(),
+                                                            expect_metadata)
+                         : ConvertDataTableRowCursorToStruct(result.rows.get(),
+                                                             expect_metadata));
+    }
     *last_record_time = scan_end;
     expect_metadata = false;
   }
@@ -167,13 +189,13 @@ absl::Status ChangeStreamsHandler::ExecuteInitialQuery(
     std::shared_ptr<Session> session,
     ServerStream<spanner_api::PartialResultSet>* stream) {
   spanner_api::TransactionOptions txn_options;
-  ZETASQL_ASSIGN_OR_RETURN(
+  GOOGLESQL_ASSIGN_OR_RETURN(
       *txn_options.mutable_read_only()->mutable_min_read_timestamp(),
       TimestampToProto(metadata().start_timestamp));
   txn_options.mutable_read_only()->set_return_read_timestamp(false);
-  ZETASQL_ASSIGN_OR_RETURN(auto txn, session->CreateSingleUseTransaction(txn_options));
+  GOOGLESQL_ASSIGN_OR_RETURN(auto txn, session->CreateSingleUseTransaction(txn_options));
   return txn->GuardedCall(Transaction::OpType::kSql, [&]() -> absl::Status {
-    ZETASQL_RETURN_IF_ERROR(VerifyChangeStreamExistence(metadata().change_stream_name,
+    GOOGLESQL_RETURN_IF_ERROR(VerifyChangeStreamExistence(metadata().change_stream_name,
                                                 txn->schema()));
     backend::Query initial_query = backend::Query{absl::Substitute(
         "SELECT start_time, partition_token, parents "
@@ -182,20 +204,34 @@ absl::Status ChangeStreamsHandler::ExecuteInitialQuery(
         ")  ORDER BY (partition_token)",
         partition_table_, metadata().start_timestamp)};
     initial_query.change_stream_internal_lookup = metadata().change_stream_name;
-    ZETASQL_ASSIGN_OR_RETURN(auto partition_results, txn->ExecuteSql(initial_query));
+    GOOGLESQL_ASSIGN_OR_RETURN(auto partition_results, txn->ExecuteSql(initial_query));
     // Initial query is guaranteed to return at least 1 child partition record.
-    ZETASQL_RET_CHECK(!IsQueryResultEmpty(partition_results));
+    GOOGLESQL_RET_CHECK(!IsQueryResultEmpty(partition_results));
 
-    ZETASQL_ASSIGN_OR_RETURN(
+    const bool mutable_key_range =
+        metadata().partition_mode ==
+        backend::kChangeStreamPartitionModeMutableKeyRange;
+    GOOGLESQL_ASSIGN_OR_RETURN(
         auto responses,
         metadata().is_pg
-            ? ConvertPartitionTableRowCursorToJson(partition_results.rows.get(),
-                                                   metadata().start_timestamp,
-                                                   metadata().tvf_name,
-                                                   /*need_metadata=*/true)
-            : ConvertPartitionTableRowCursorToStruct(
-                  partition_results.rows.get(), metadata().start_timestamp,
-                  /*need_metadata=*/true));
+            ? (mutable_key_range
+                   ? ConvertPartitionTableRowCursorToBytes(
+                         partition_results.rows.get(),
+                         metadata().start_timestamp, /*partition_token=*/"",
+                         metadata().tvf_name,
+                         /*need_metadata=*/true)
+                   : ConvertPartitionTableRowCursorToJson(
+                         partition_results.rows.get(),
+                         metadata().start_timestamp, metadata().tvf_name,
+                         /*need_metadata=*/true))
+            : (mutable_key_range
+                   ? ConvertPartitionTableRowCursorToProto(
+                         partition_results.rows.get(),
+                         metadata().start_timestamp, /*partition_token=*/"",
+                         /*need_metadata=*/true)
+                   : ConvertPartitionTableRowCursorToStruct(
+                         partition_results.rows.get(),
+                         metadata().start_timestamp, /*need_metadata=*/true)));
 
     for (auto& response : responses) {
       stream->Send(response);
@@ -211,10 +247,10 @@ absl::StatusOr<absl::Time> ChangeStreamsHandler::TryGetPartitionTokenEndTime(
   txn_options.mutable_read_only()->set_return_read_timestamp(false);
   // If the user provided tvf start time is past now, wait until this future
   // time to perform a read on partition token end time.
-  ZETASQL_ASSIGN_OR_RETURN(*txn_options.mutable_read_only()->mutable_read_timestamp(),
+  GOOGLESQL_ASSIGN_OR_RETURN(*txn_options.mutable_read_only()->mutable_read_timestamp(),
                    TimestampToProto(read_ts));
-  ZETASQL_ASSIGN_OR_RETURN(auto txn, session->CreateSingleUseTransaction(txn_options));
-  ZETASQL_RETURN_IF_ERROR(
+  GOOGLESQL_ASSIGN_OR_RETURN(auto txn, session->CreateSingleUseTransaction(txn_options));
+  GOOGLESQL_RETURN_IF_ERROR(
       txn->GuardedCall(Transaction::OpType::kSql, [&]() -> absl::Status {
         backend::Query get_partition_token_time_query =
             backend::Query{absl::Substitute(
@@ -224,7 +260,7 @@ absl::StatusOr<absl::Time> ChangeStreamsHandler::TryGetPartitionTokenEndTime(
                 partition_table_, metadata().partition_token.value())};
         get_partition_token_time_query.change_stream_internal_lookup =
             metadata().change_stream_name;
-        ZETASQL_ASSIGN_OR_RETURN(auto token_time_results,
+        GOOGLESQL_ASSIGN_OR_RETURN(auto token_time_results,
                          txn->ExecuteSql(get_partition_token_time_query));
         if (IsQueryResultEmpty(token_time_results)) {
           return error::
@@ -288,9 +324,23 @@ backend::Query ChangeStreamsHandler::ConstructPartitionTablePartitionQuery()
   return data_table_partition_query;
 }
 
+backend::Query
+ChangeStreamsHandler::ConstructQueryStartPartitionTablePartitionQuery() const {
+  backend::Query query_partition_record = backend::Query{
+      absl::Substitute("SELECT start_time, partition_token, parents FROM $0 "
+                       "WHERE partition_token = '$1'",
+                       partition_table_, metadata().partition_token.value())};
+  query_partition_record.change_stream_internal_lookup =
+      metadata().change_stream_name;
+  return query_partition_record;
+}
+
 absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
     ServerStream<spanner_api::PartialResultSet>* stream,
     std::shared_ptr<Session> session) {
+  const bool mutable_key_range =
+      metadata().partition_mode ==
+      backend::kChangeStreamPartitionModeMutableKeyRange;
   const absl::Time tvf_end = metadata().end_timestamp.has_value()
                                  ? metadata().end_timestamp.value()
                                  : absl::InfiniteFuture();
@@ -316,7 +366,7 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
     absl::Time current_txn_snapshot_time = std::max(current_end, now);
     // Get the newest retention period so most up to date retention will apply
     // to curent running query.
-    ZETASQL_ASSIGN_OR_RETURN(
+    GOOGLESQL_ASSIGN_OR_RETURN(
         absl::Duration current_retention,
         TryGetChangeStreamRetentionPeriod(metadata().change_stream_name,
                                           session, current_txn_snapshot_time));
@@ -325,11 +375,11 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
     // table to see if the end time has been churned and update the partition
     // end time.
     if (partition_token_end_time == absl::InfiniteFuture()) {
-      ZETASQL_ASSIGN_OR_RETURN(
+      GOOGLESQL_ASSIGN_OR_RETURN(
           partition_token_end_time,
           TryGetPartitionTokenEndTime(session, current_txn_snapshot_time));
     }
-    ZETASQL_RETURN_IF_ERROR(ValidateTokenInRetentionWindow(
+    GOOGLESQL_RETURN_IF_ERROR(ValidateTokenInRetentionWindow(
         metadata().start_timestamp, current_start, partition_token_end_time,
         current_retention));
     // Only scan data records up to minimum of current chopped end time
@@ -338,17 +388,41 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
     const bool expect_heartbeat =
         current_end - last_record_time >= heartbeat_interval;
     // This transaction will be blocked until now passes current_end.
-    ZETASQL_ASSIGN_OR_RETURN(*txn_options.mutable_read_only()->mutable_read_timestamp(),
+    GOOGLESQL_ASSIGN_OR_RETURN(*txn_options.mutable_read_only()->mutable_read_timestamp(),
                      TimestampToProto(current_txn_snapshot_time));
-    ZETASQL_ASSIGN_OR_RETURN(auto txn,
+    GOOGLESQL_ASSIGN_OR_RETURN(auto txn,
                      session->CreateSingleUseTransaction(txn_options));
     absl::Status status =
         txn->GuardedCall(Transaction::OpType::kSql, [&]() -> absl::Status {
+          if (mutable_key_range) {
+            backend::Query head_query_partition_table =
+                ConstructQueryStartPartitionTablePartitionQuery();
+            GOOGLESQL_ASSIGN_OR_RETURN(auto head_partition_records_results,
+                             txn->ExecuteSql(head_query_partition_table));
+            if (!IsQueryResultEmpty(head_partition_records_results)) {
+              GOOGLESQL_ASSIGN_OR_RETURN(
+                  auto responses,
+                  metadata().is_pg
+                      ? ConvertQueryStartPartitionTableRowCursorToBytes(
+                            head_partition_records_results.rows.get(),
+                            metadata().start_timestamp, metadata().tvf_name,
+                            expect_metadata)
+                      : ConvertQueryStartPartitionTableRowCursorToProto(
+                            head_partition_records_results.rows.get(),
+                            metadata().start_timestamp, expect_metadata));
+              if (!responses.empty()) {
+                expect_metadata = false;
+                for (auto& response : responses) {
+                  stream->Send(response);
+                }
+              }
+            }
+          }
           backend::Query read_data_query =
               ConstructDataTablePartitionQuery(current_start, scan_end);
-          ZETASQL_ASSIGN_OR_RETURN(auto data_records_results,
+          GOOGLESQL_ASSIGN_OR_RETURN(auto data_records_results,
                            txn->ExecuteSql(read_data_query));
-          ZETASQL_RETURN_IF_ERROR(ProcessDataChangeRecordsAndStreamBack(
+          GOOGLESQL_RETURN_IF_ERROR(ProcessDataChangeRecordsAndStreamBack(
               data_records_results, expect_heartbeat, scan_end, expect_metadata,
               &last_record_time, stream));
           if (partition_token_end_time <= current_end) {
@@ -356,20 +430,32 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
             // in current query.
             backend::Query tail_query_partition_table =
                 ConstructPartitionTablePartitionQuery();
-            ZETASQL_ASSIGN_OR_RETURN(auto tail_partition_records_results,
+            GOOGLESQL_ASSIGN_OR_RETURN(auto tail_partition_records_results,
                              txn->ExecuteSql(tail_query_partition_table));
-            ZETASQL_RET_CHECK(!IsQueryResultEmpty(tail_partition_records_results));
-            ZETASQL_ASSIGN_OR_RETURN(
+            GOOGLESQL_RET_CHECK(!IsQueryResultEmpty(tail_partition_records_results));
+            GOOGLESQL_ASSIGN_OR_RETURN(
                 auto responses,
                 metadata().is_pg
-                    ? ConvertPartitionTableRowCursorToJson(
-                          tail_partition_records_results.rows.get(),
-                          /*initial_start_time=*/std::nullopt,
-                          metadata().tvf_name, expect_metadata)
-                    : ConvertPartitionTableRowCursorToStruct(
-                          tail_partition_records_results.rows.get(),
-                          /*initial_start_time=*/std::nullopt,
-                          expect_metadata));
+                    ? (mutable_key_range
+                           ? ConvertPartitionTableRowCursorToBytes(
+                                 tail_partition_records_results.rows.get(),
+                                 /*initial_start_time=*/std::nullopt,
+                                 metadata().partition_token.value(),
+                                 metadata().tvf_name, expect_metadata)
+                           : ConvertPartitionTableRowCursorToJson(
+                                 tail_partition_records_results.rows.get(),
+                                 /*initial_start_time=*/std::nullopt,
+                                 metadata().tvf_name, expect_metadata))
+                    : (mutable_key_range
+                           ? ConvertPartitionTableRowCursorToProto(
+                                 tail_partition_records_results.rows.get(),
+                                 /*initial_start_time=*/std::nullopt,
+                                 metadata().partition_token.value(),
+                                 expect_metadata)
+                           : ConvertPartitionTableRowCursorToStruct(
+                                 tail_partition_records_results.rows.get(),
+                                 /*initial_start_time=*/std::nullopt,
+                                 expect_metadata)));
             expect_metadata = false;
             for (auto& response : responses) {
               stream->Send(response);
@@ -378,7 +464,7 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
           }
           return absl::OkStatus();
         });
-    ZETASQL_RETURN_IF_ERROR(status);
+    GOOGLESQL_RETURN_IF_ERROR(status);
     // Increment by 1 microsecond gap to avoid repetitive records.
     current_start = scan_end + absl::Microseconds(1);
     current_end = std::min(
@@ -389,7 +475,7 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
 
   // If expect_metadata is still true, stub a heartbeat record.
   if (expect_metadata == true) {
-    ZETASQL_ASSIGN_OR_RETURN(
+    GOOGLESQL_ASSIGN_OR_RETURN(
         auto extra_heartbeat,
         metadata().is_pg
             ? ConvertHeartbeatTimestampToJson(tvf_end, metadata().tvf_name,
@@ -406,7 +492,7 @@ absl::Status ChangeStreamsHandler::ExecuteChangeStreamQuery(
     const spanner_api::ExecuteSqlRequest* request,
     ServerStream<spanner_api::PartialResultSet>* stream,
     std::shared_ptr<Session> session) {
-  ZETASQL_RETURN_IF_ERROR(
+  GOOGLESQL_RETURN_IF_ERROR(
       ValidateTransactionSelectorForChangeStreamQuery(request->transaction()));
   if (request->query_mode() == spanner_api::ExecuteSqlRequest::PLAN) {
     return error::EmulatorDoesNotSupportQueryPlans();

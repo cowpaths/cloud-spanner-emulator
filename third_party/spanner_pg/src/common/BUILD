@@ -44,7 +44,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 filegroup(
     name = "_common",
@@ -70,6 +70,7 @@ filegroup(
         "link-canary.c",
         "md5.c",
         "md5_common.c",
+        "percentrepl.c",
         "pg_get_line.c",
         "pg_lzcompress.c",
         "pg_prng.c",

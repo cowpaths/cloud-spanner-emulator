@@ -32,6 +32,7 @@
 #include "absl/time/time.h"
 #include "backend/common/ids.h"
 #include "common/constants.h"
+#include "common/feature_flags.h"
 #include "common/limits.h"
 
 namespace google {
@@ -126,6 +127,76 @@ absl::Status InvalidCreateInstanceRequestUnitsMultiple() {
   return absl::Status(
       absl::StatusCode::kInvalidArgument,
       "Invalid CreateInstance request. Processing units should be "
+      "multiple of 100 for values below 1000 and multiples of "
+      "1000 for values above 1000.");
+}
+
+// Instance partition errors.
+absl::Status InvalidInstancePartitionURI(absl::string_view uri) {
+  return absl::Status(absl::StatusCode::kInvalidArgument,
+                      absl::StrCat("Invalid instance partition uri: ", uri));
+}
+
+absl::Status InstancePartitionNotFound(absl::string_view uri) {
+  absl::Status error(absl::StatusCode::kNotFound,
+                     absl::StrCat("Instance partition not found: ", uri));
+
+  google::rpc::ResourceInfo info;
+  info.set_resource_type(kInstancePartitionResourceType);
+  std::string resource_name(uri);
+  info.set_resource_name(resource_name);
+  info.set_description("Instance partition does not exist.");
+  absl::Cord serialized(info.SerializeAsString());
+  error.SetPayload(kResourceInfoType, serialized);
+  return error;
+}
+
+absl::Status InstancePartitionAlreadyExists(absl::string_view uri) {
+  return absl::Status(absl::StatusCode::kAlreadyExists,
+                      absl::StrCat("Instance partition already exists: ", uri));
+}
+
+absl::Status InstancePartitionNameMismatch(absl::string_view uri) {
+  return absl::Status(absl::StatusCode::kInvalidArgument,
+                      absl::StrCat("Mismatching instance partition: ", uri));
+}
+
+absl::Status InstancePartitionUpdatesNotSupported() {
+  return absl::Status(
+      absl::StatusCode::kUnimplemented,
+      "Cloud Spanner Emulator does not support updating instance partitions.");
+}
+
+absl::Status InvalidInstancePartitionName(absl::string_view partition_id) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::StrCat("Instance partition ID must start with a lowercase letter, "
+                   "be 2-64 characters long, contain only lowercase "
+                   "letters, numbers, or hyphens, and not end with a "
+                   "hyphen. Got: ",
+                   partition_id));
+}
+
+absl::Status InstancePartitionReferencedByDatabase(
+    absl::string_view partition_uri) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::StrCat("Cannot delete instance partition ", partition_uri,
+                   " because there are databases referring to it. Please "
+                   "alter/drop placements to not use this instance partition "
+                   "in this database before deleting the instance partition."));
+}
+
+absl::Status InvalidCreateInstancePartitionRequestUnitsNotBoth() {
+  return absl::Status(absl::StatusCode::kInvalidArgument,
+                      "Invalid CreateInstancePartition request. Only one of "
+                      "nodes or processing units should be specified.");
+}
+
+absl::Status InvalidCreateInstancePartitionRequestUnitsMultiple() {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      "Invalid CreateInstancePartition request. Processing units should be "
       "multiple of 100 for values below 1000 and multiples of "
       "1000 for values above 1000.");
 }
@@ -1247,11 +1318,44 @@ PropertyGraphDynamicLabelElementTablesUsedWithSchemaDefinedLabelsElementTables(
 }
 
 absl::Status UnsupportedChangeStreamOption(absl::string_view option_name) {
+  if (EmulatorFeatureFlags::instance()
+          .flags()
+          .enable_mutable_key_range_change_stream) {
+    return absl::Status(
+        absl::StatusCode::kFailedPrecondition,
+        absl::Substitute("Invalid Change Stream Option: $0. "
+                         "Supported options are retention_period, "
+                         "value_capture_type, and partition_mode.",
+                         option_name));
+  }
   return absl::Status(absl::StatusCode::kFailedPrecondition,
-                      absl::Substitute("Invalid Change Stream Option: $0."
+                      absl::Substitute("Invalid Change Stream Option: $0. "
                                        "Supported options are retention_period "
                                        "and value_capture_type.",
                                        option_name));
+}
+
+absl::Status InvalidChangeStreamPartitionMode(
+    absl::string_view partition_mode) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Invalid partition_mode: $0. Change Streams only "
+                       "support partition modes in IMMUTABLE_KEY_RANGE and "
+                       "MUTABLE_KEY_RANGE.",
+                       partition_mode));
+}
+
+absl::Status AlterChangeStreamPartitionModeNotAllowed(
+    absl::string_view change_stream_name, absl::string_view partition_mode) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute(
+          "Cannot alter partition_mode to a different value. A Change Stream "
+          "of IMMUTABLE_KEY_RANGE (by default or created with "
+          "partition_mode='IMMUTABLE_KEY_RANGE') cannot be altered with "
+          "partition_mode='MUTABLE_KEY_RANGE' or vice versa. "
+          "Change Stream $0 was created with partition_mode $1.",
+          change_stream_name, partition_mode));
 }
 
 absl::Status InvalidChangeStreamRetentionPeriodOptionValue() {
@@ -1322,6 +1426,11 @@ absl::Status InvalidChangeStreamTvfArgumentNullStartTimestamp() {
                       "start_timestamp must not be null.");
 }
 
+absl::Status InvalidChangeStreamTvfArgumentNullEndTimestamp() {
+  return absl::Status(absl::StatusCode::kInvalidArgument,
+                      "end_timestamp must not be null.");
+}
+
 absl::Status InvalidChangeStreamTvfArgumentStartTimestampTooFarInFuture(
     absl::string_view min_read_ts_string, absl::string_view max_read_ts_string,
     absl::string_view start_ts_string) {
@@ -1333,6 +1442,19 @@ absl::Status InvalidChangeStreamTvfArgumentStartTimestampTooFarInFuture(
           "current maximum start timestamp: "
           "$1. Received start_timestamp: $2.",
           min_read_ts_string, max_read_ts_string, start_ts_string));
+}
+
+absl::Status InvalidChangeStreamTvfArgumentEndTimestampTooFarInFuture(
+    absl::string_view min_read_ts_string, absl::string_view max_read_ts_string,
+    absl::string_view end_ts_string) {
+  return absl::Status(
+      absl::StatusCode::kOutOfRange,
+      absl::Substitute(
+          "Specified end_timestamp is too far in the future. Please specify an "
+          "end_timestamp within the earliest start timestamp: "
+          "$0, and the current maximum end timestamp: $1. Received "
+          "end_timestamp: $2.",
+          min_read_ts_string, max_read_ts_string, end_ts_string));
 }
 
 absl::Status InvalidChangeStreamTvfArgumentStartTimestampTooOld(
@@ -1611,11 +1733,12 @@ absl::Status MultipleRefsToKeyColumn(absl::string_view object_type,
 }
 
 absl::Status UnsupportedAlterDatabaseOption(absl::string_view option_name) {
-  return absl::Status(absl::StatusCode::kFailedPrecondition,
-                      absl::Substitute("Invalid Alter Database Option: $0. "
-                                       "Supported options are witness_location "
-                                       "and default_leader.",
-                                       option_name));
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Invalid Alter Database Option: $0. "
+                       "Supported options are witness_location, "
+                       "default_leader, and score_version.",
+                       option_name));
 }
 
 absl::Status NullValueAlterDatabaseOption() {
@@ -1726,6 +1849,31 @@ absl::Status IndexRefsNonExistentColumn(absl::string_view index_name,
       absl::Substitute("Index $0 specifies key column $1 which does not exist "
                        "in the index's base table.",
                        index_name, column_name));
+}
+
+absl::Status CannotNullFilterColumnNotInIndex(absl::string_view column_name,
+                                              absl::string_view index_name) {
+  return absl::Status(
+      absl::StatusCode::kUnimplemented,
+      absl::Substitute(
+          "Cannot null-filter column $0 that is not in the index  $1.",
+          column_name, index_name));
+}
+
+absl::Status IndexRefsNonexistentColumnNullFiltered(
+    absl::string_view index_name, absl::string_view column_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute(
+          "Index $0 specifies a null filter on a nonexistent column $1.",
+          index_name, column_name));
+}
+
+absl::Status IndexCannotUseBothNullFiltered(absl::string_view index_name) {
+  return absl::Status(absl::StatusCode::kFailedPrecondition,
+                      absl::Substitute("Index $0 cannot use the keyword "
+                                       "NULL_FILTERED and have a WHERE clause.",
+                                       index_name));
 }
 
 absl::Status AlteringParentColumn(absl::string_view column_name) {
@@ -1903,6 +2051,51 @@ absl::Status MlPredictRow_Args_NoInstances() {
                       "must contain 'instances'");
 }
 
+absl::Status AiClassify_Categories_NotArray() {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      "The categories argument to AI.CLASSIFY function must be an array.");
+}
+
+absl::Status AiClassify_Categories_EmptyArray() {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      "The categories argument to AI.CLASSIFY function must not be an empty "
+      "array.");
+}
+
+absl::Status AiClassify_Categories_NotArrayOfObjects() {
+  return absl::Status(absl::StatusCode::kInvalidArgument,
+                      "The categories argument to AI.CLASSIFY function must be "
+                      "an array of objects.");
+}
+
+absl::Status AiClassify_Categories_NullElement() {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      "The categories argument to AI.CLASSIFY function must not contain NULL "
+      "elements.");
+}
+
+absl::Status AiClassify_Categories_InvalidObject() {
+  return absl::Status(absl::StatusCode::kInvalidArgument,
+                      "Each category passed to AI.CLASSIFY function must have "
+                      "exactly two string fields: 'label' and 'description'.");
+}
+
+absl::Status AiClassify_Categories_EmptyLabel() {
+  return absl::Status(absl::StatusCode::kInvalidArgument,
+                      "Each category passed to AI.CLASSIFY function must have "
+                      "non empty label.");
+}
+
+absl::Status AiClassify_Categories_EmptyDescription() {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      "Each category passed to AI.CLASSIFY function must have non empty "
+      "description.");
+}
+
 absl::Status EmptyStruct() {
   return absl::Status(absl::StatusCode::kFailedPrecondition,
                       "Empty STRUCT is not allowed.");
@@ -1992,6 +2185,13 @@ absl::Status ModelColumnDefault(absl::string_view model_name,
       absl::Substitute("Default values are not supported in models. "
                        " Used in Model $0 column $1.",
                        model_name, column_name));
+}
+
+absl::Status AiOperator_UnexpectedResponse(absl::string_view response) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Unexpected response from VertexAI endpoint: $0.",
+                       response));
 }
 
 absl::Status IndexInterleaveTableNotFound(absl::string_view index_name,
@@ -2881,7 +3081,7 @@ absl::Status NonDeterministicFunctionInColumnExpression(
   return absl::Status(
       absl::StatusCode::kFailedPrecondition,
       absl::Substitute(
-          "Expression is non-deterministic due to the use of non-determinstic "
+          "Expression is non-deterministic due to the use of non-deterministic "
           "function `$0`. Expression of $1 must yield "
           "the same value for the same dependent column values. "
           "Non-deterministic functions inside the expressions are not allowed.",
@@ -3507,6 +3707,13 @@ absl::Status InvalidPartitionedQueryMode() {
       "with partitioned queries.");
 }
 
+absl::Status DataBoostRequiresPartitionToken() {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      "Data Boost is only valid for partitioned queries or reads, and requires "
+      "a partition token.");
+}
+
 absl::Status RowDeletionPolicyDoesNotExist(absl::string_view table_name) {
   return absl::Status(
       absl::StatusCode::kInvalidArgument,
@@ -4044,7 +4251,7 @@ absl::Status TooManyViewsPerDatabase(absl::string_view function_name,
                                        function_name, limit));
 }
 
-absl::Status ViewRequiresInvokerSecurity(absl::string_view view_name) {
+absl::Status ViewMissingSqlSecurity(absl::string_view view_name) {
   return absl::Status(
       absl::StatusCode::kInvalidArgument,
       absl::Substitute("View `$0` is missing the SQL SECURITY clause.",
@@ -4142,6 +4349,20 @@ absl::Status WithViewsAreNotSupported() {
 }
 
 // Function errors
+absl::Status UdfsNotSupported(absl::string_view function_name) {
+  return absl::Status(
+      absl::StatusCode::kUnimplemented,
+      absl::Substitute("User defined functions are not supported in the "
+                       "Emulator. Function: $0",
+                       function_name));
+}
+
+absl::Status UdfsNotSupportedPostgreSQL(absl::string_view op) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("<$0 FUNCTION> statement is not supported", op));
+}
+
 absl::Status FunctionDefinerSecurityError(absl::string_view function_name) {
   return absl::Status(
       absl::StatusCode::kInvalidArgument,
@@ -4149,12 +4370,26 @@ absl::Status FunctionDefinerSecurityError(absl::string_view function_name) {
           "Function `$0` uses unsupported SQL SECURITY DEFINER clause.",
           function_name));
 }
+absl::Status MissingOptionForFunction(absl::string_view option_name,
+                                      absl::string_view function_name) {
+  return absl::Status(absl::StatusCode::kInvalidArgument,
+                      absl::Substitute("Missing option $0 for function $1.",
+                                       option_name, function_name));
+}
 
 absl::Status InvalidOptionForFunction(absl::string_view option_name,
                                       absl::string_view function_name) {
   return absl::Status(absl::StatusCode::kInvalidArgument,
-                      absl::Substitute("Invalid option $0 for remote UDF $1.",
+                      absl::Substitute("Invalid option $0 for function $1.",
                                        option_name, function_name));
+}
+
+absl::Status InvalidOptionValueForFunction(absl::string_view option_name,
+                                           absl::string_view function_name) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::Substitute("Invalid option value for option $0 of function $1.",
+                       option_name, function_name));
 }
 
 absl::Status InvalidOptionValueForFunction(absl::string_view option_value,
@@ -4162,9 +4397,32 @@ absl::Status InvalidOptionValueForFunction(absl::string_view option_value,
                                            absl::string_view function_name) {
   return absl::Status(
       absl::StatusCode::kInvalidArgument,
-      absl::Substitute(
-          "Invalid option value $0 for option $1 of remote UDF $2.",
-          option_value, option_name, function_name));
+      absl::Substitute("Invalid option value $0 for option $1 of function $2.",
+                       option_value, option_name, function_name));
+}
+
+absl::Status UnsupportedTypeInRemoteFunction(absl::string_view function_name,
+                                             absl::string_view type_name) {
+  return absl::Status(absl::StatusCode::kUnimplemented,
+                      absl::Substitute("Remote UDF $0 has unsupported type $1.",
+                                       function_name, type_name));
+}
+
+absl::Status DuplicateStructFieldNamesInRemoteFunction(
+    absl::string_view function_name, absl::string_view field_name) {
+  return absl::Status(absl::StatusCode::kInvalidArgument,
+                      absl::Substitute("Remote UDF $0 declaration has struct "
+                                       "with duplicate field names `$1`.",
+                                       function_name, field_name));
+}
+
+absl::Status RemoteUdfMustBeNotDeterministic(absl::string_view function_name,
+                                             absl::string_view determinism) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::Substitute("Remote UDF $0 declaration must specify the "
+                       "$1 attribute.",
+                       function_name, determinism));
 }
 
 absl::Status FunctionReplaceError(absl::string_view function_name,
@@ -4375,6 +4633,13 @@ absl::Status ColumnIsNotIdentityColumn(absl::string_view table_name,
   return absl::Status(absl::StatusCode::kInvalidArgument,
                       absl::StrCat("Column is not an identity column in table ",
                                    table_name, ": ", column_name));
+}
+
+absl::Status UnsupportedIdentityColumnType(absl::string_view column_name) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::StrCat("The type of an identity column ", column_name,
+                   " is invalid. ", "Currently, only INT64 is supported."));
 }
 
 absl::Status DefaultSequenceKindAlreadySet() {

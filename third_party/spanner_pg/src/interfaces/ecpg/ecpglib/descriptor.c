@@ -210,7 +210,7 @@ get_char_item(int lineno, void *var, enum ECPGttype vartype, char *value, int va
 		case ECPGt_varchar:
 			{
 				struct ECPGgeneric_varchar *variable =
-				(struct ECPGgeneric_varchar *) var;
+					(struct ECPGgeneric_varchar *) var;
 
 				if (varcharsize == 0)
 					memcpy(variable->arr, value, strlen(value));
@@ -482,6 +482,16 @@ ECPGget_desc(int lineno, const char *desc_name, int index,...)
 		memset(&stmt, 0, sizeof stmt);
 		stmt.lineno = lineno;
 
+		/* desperate try to guess something sensible */
+		stmt.connection = ecpg_get_connection(NULL);
+		if (stmt.connection == NULL)
+		{
+			ecpg_raise(lineno, ECPG_NO_CONN, ECPG_SQLSTATE_CONNECTION_DOES_NOT_EXIST,
+					   ecpg_gettext("NULL"));
+			va_end(args);
+			return false;
+		}
+
 		/* Make sure we do NOT honor the locale for numeric input */
 		/* since the database gives the standard decimal point */
 		/* (see comments in execute.c) */
@@ -504,8 +514,6 @@ ECPGget_desc(int lineno, const char *desc_name, int index,...)
 		setlocale(LC_NUMERIC, "C");
 #endif
 
-		/* desperate try to guess something sensible */
-		stmt.connection = ecpg_get_connection(NULL);
 		ecpg_store_result(ECPGresult, index, &stmt, &data_var);
 
 #ifdef HAVE_USELOCALE
@@ -597,7 +605,7 @@ set_desc_attr(struct descriptor_item *desc_item, struct variable *var,
 	else
 	{
 		struct ECPGgeneric_bytea *variable =
-		(struct ECPGgeneric_bytea *) (var->value);
+			(struct ECPGgeneric_bytea *) (var->value);
 
 		desc_item->is_binary = true;
 		desc_item->data_len = variable->len;
@@ -923,8 +931,7 @@ ECPGdescribe(int line, int compat, bool input, const char *connection_name, cons
 					if (!ecpg_check_PQresult(res, line, con->connection, compat))
 						break;
 
-					if (desc->result != NULL)
-						PQclear(desc->result);
+					PQclear(desc->result);
 
 					desc->result = res;
 					ret = true;

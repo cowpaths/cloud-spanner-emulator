@@ -3,7 +3,7 @@
  * parse_func.c
  *		handle function calls in parser
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -624,14 +624,171 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 							 "You might need to add explicit type casts."),
 					 parser_errposition(pstate, location)));
 		else
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_FUNCTION),
-					 errmsg("function %s does not exist",
-							func_signature_string(funcname, nargs, argnames,
-												  actual_arg_types)),
-					 errhint("No function matches the given name and argument types. "
-							 "You might need to add explicit type casts."),
-					 parser_errposition(pstate, location)));
+		{
+			// SPANGRES BEGIN
+			/*
+			 * SPANGRES FUNCTION RESOLUTION ERROR MAP:
+			 *
+			 * When a function cannot be resolved with the given arguments, we determine
+			 * whether the function call was unqualified (single identifier) or schema-qualified:
+			 *
+			 * 1. UNQUALIFIED FUNCTION (list_length(funcname) == 1):
+			 *    Scan user schemas outside the active search_path / udf_search_path
+			 *    via FindCandidateSchemasForUnqualifiedFunctionC():
+			 *    - Case 1a (Single Match): Function found in exactly 1 candidate schema:
+			 *      Report ERRCODE_UNDEFINED_FUNCTION with errdetail stating the containing
+			 *      schema and errhint with direct qualification / search_path instructions
+			 *      and Cloud Spanner documentation link.
+			 *    - Case 1b (Few Matches): Function found in 2-3 candidate schemas:
+			 *      Report ERRCODE_UNDEFINED_FUNCTION with errdetail listing all matching schemas
+			 *      and errhint to qualify with the intended schema.
+			 *    - Case 1c (Many Matches): Function found in >3 candidate schemas:
+			 *      Report ERRCODE_UNDEFINED_FUNCTION with errdetail listing the first 3 schemas
+			 *      plus count of remaining schemas (+N more) and errhint to qualify.
+			 *    - Case 1d (No Matches): Function not found in any candidate schema (0 candidates):
+			 *      Report standard PostgreSQL hint ("No function matches the given name and
+			 *      argument types. You might need to add explicit type casts.").
+			 *
+			 * 2. SCHEMA-QUALIFIED FUNCTION (list_length(funcname) > 1):
+			 *    Schema was explicitly specified by the user, so search_path is not applicable.
+			 *    Report standard PostgreSQL undefined function error and type cast hint.
+			 */
+			if (list_length(funcname) == 1)
+			{
+				char* func_name_str = strVal(linitial(funcname));
+				int num_candidate_schemas = 0;
+				char** candidate_schemas =
+					FindCandidateSchemasForUnqualifiedFunctionC(func_name_str, &num_candidate_schemas);
+				bool search_path_enabled = IsSearchPathFeatureEnabledC();
+				/* Case 1a: Exactly 1 candidate schema outside search path */
+				if (num_candidate_schemas == 1)
+				{
+					char* schema_name = candidate_schemas[0];
+					if (search_path_enabled)
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_FUNCTION),
+								 errmsg("function %s does not exist",
+										func_signature_string(funcname, nargs, argnames,
+															  actual_arg_types)),
+								 errdetail("Function \"%s(...)\" exists in schema \"%s\", which is not in your search_path or udf_search_path.",
+										   func_name_str, schema_name),
+								 errhint("You can call \"%s.%s(...)\" directly, or add \"%s\" to your search_path or udf_search_path (see https://cloud.google.com/spanner/docs/schema-and-data-model#search-path).",
+										 schema_name, func_name_str, schema_name),
+								 parser_errposition(pstate, location)));
+					}
+					else
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_FUNCTION),
+								 errmsg("function %s does not exist",
+										func_signature_string(funcname, nargs, argnames,
+															  actual_arg_types)),
+								 errdetail("Function \"%s(...)\" exists in schema \"%s\".",
+										   func_name_str, schema_name),
+								 errhint("You can call \"%s.%s(...)\" directly.",
+										 schema_name, func_name_str),
+								 parser_errposition(pstate, location)));
+					}
+				}
+				else if (num_candidate_schemas > 1)
+				{
+					/* Case 1b: 2-3 candidate schemas outside search path (list all) */
+					if (num_candidate_schemas <= 3)
+					{
+						StringInfoData sbuf;
+						initStringInfo(&sbuf);
+						for (int i = 0; i < num_candidate_schemas; i++)
+						{
+							if (i > 0)
+								appendStringInfoString(&sbuf, ", ");
+							appendStringInfo(&sbuf, "\"%s\"", candidate_schemas[i]);
+						}
+						if (search_path_enabled)
+						{
+							ereport(ERROR,
+									(errcode(ERRCODE_UNDEFINED_FUNCTION),
+									 errmsg("function %s does not exist",
+											func_signature_string(funcname, nargs, argnames,
+																  actual_arg_types)),
+									 errdetail("Function \"%s(...)\" exists in multiple schemas not in your search_path or udf_search_path: %s.",
+											   func_name_str, sbuf.data),
+									 errhint("Qualify the function call with the intended schema (e.g. \"%s.%s(...)\"), or add the intended schema to your search_path or udf_search_path (see https://cloud.google.com/spanner/docs/schema-and-data-model#search-path).",
+											 candidate_schemas[0], func_name_str),
+									 parser_errposition(pstate, location)));
+						}
+						else
+						{
+							ereport(ERROR,
+									(errcode(ERRCODE_UNDEFINED_FUNCTION),
+									 errmsg("function %s does not exist",
+											func_signature_string(funcname, nargs, argnames,
+																  actual_arg_types)),
+									 errdetail("Function \"%s(...)\" exists in multiple schemas: %s.",
+											   func_name_str, sbuf.data),
+									 errhint("Qualify the function call with the intended schema (e.g. \"%s.%s(...)\").",
+											 candidate_schemas[0], func_name_str),
+									 parser_errposition(pstate, location)));
+						}
+					}
+					else
+					{
+						/* Case 1c: >3 candidate schemas outside search path (list first 3 + remainder) */
+						if (search_path_enabled)
+						{
+							ereport(ERROR,
+									(errcode(ERRCODE_UNDEFINED_FUNCTION),
+									 errmsg("function %s does not exist",
+											func_signature_string(funcname, nargs, argnames,
+																  actual_arg_types)),
+									 errdetail("Function \"%s(...)\" exists in %d schemas not in your search_path or udf_search_path: \"%s\", \"%s\", \"%s\", ... (+%d more).",
+											   func_name_str, num_candidate_schemas, candidate_schemas[0], candidate_schemas[1], candidate_schemas[2], num_candidate_schemas - 3),
+									 errhint("Qualify the function call with the intended schema (e.g. \"%s.%s(...)\"), or add the intended schema to your search_path or udf_search_path (see https://cloud.google.com/spanner/docs/schema-and-data-model#search-path).",
+											 candidate_schemas[0], func_name_str),
+									 parser_errposition(pstate, location)));
+						}
+						else
+						{
+							ereport(ERROR,
+									(errcode(ERRCODE_UNDEFINED_FUNCTION),
+									 errmsg("function %s does not exist",
+											func_signature_string(funcname, nargs, argnames,
+																  actual_arg_types)),
+									 errdetail("Function \"%s(...)\" exists in %d schemas: \"%s\", \"%s\", \"%s\", ... (+%d more).",
+											   func_name_str, num_candidate_schemas, candidate_schemas[0], candidate_schemas[1], candidate_schemas[2], num_candidate_schemas - 3),
+									 errhint("Qualify the function call with the intended schema (e.g. \"%s.%s(...)\").",
+											 candidate_schemas[0], func_name_str),
+									 parser_errposition(pstate, location)));
+						}
+					}
+				}
+				else
+				{
+					/* Case 1d: No candidate schemas found outside search path (standard PG hint) */
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_FUNCTION),
+							 errmsg("function %s does not exist",
+									func_signature_string(funcname, nargs, argnames,
+														  actual_arg_types)),
+							 errhint("No function matches the given name and argument types. "
+									 "You might need to add explicit type casts."),
+							 parser_errposition(pstate, location)));
+				}
+			}
+			else
+			{
+				/* Case 2: Schema-qualified function call (search_path not applicable) */
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_FUNCTION),
+						 errmsg("function %s does not exist",
+								func_signature_string(funcname, nargs, argnames,
+													  actual_arg_types)),
+						 errhint("No function matches the given name and argument types. "
+								 "You might need to add explicit type casts."),
+						 parser_errposition(pstate, location)));
+			}
+			// SPANGRES END
+		}
 	}
 
 	/*
@@ -806,6 +963,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 		aggref->aggstar = agg_star;
 		aggref->aggvariadic = func_variadic;
 		aggref->aggkind = aggkind;
+		aggref->aggpresorted = false;
 		/* agglevelsup will be set by transformAggregateCall */
 		aggref->aggsplit = AGGSPLIT_SIMPLE; /* planner might change this */
 		// SPANGRES BEGIN
@@ -1693,7 +1851,6 @@ func_get_detail(List *funcname,
 			// SPANGRES BEGIN
 			// Unused variables
 			// Datum		proargdefaults;
-			// bool		isnull;
 			// char	   *str;
 			// List	   *defaults;
 			// SPANGRES END

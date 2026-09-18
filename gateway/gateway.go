@@ -21,10 +21,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"time"
 
 	// We need this to make sure that the gateway can serialize the google.rpc.ErrorInfo proto.
@@ -52,6 +54,7 @@ type Options struct {
 	DisableQueryNullFilteredIndexCheck             bool
 	OverrideMaxDatabasesPerInstance                int
 	OverrideChangeStreamPartitionTokenAliveSeconds int
+	RemoteFunctionsHostPort                        string
 }
 
 // Gateway implements the emulator gateway server.
@@ -79,12 +82,20 @@ func (gw *Gateway) Run() {
 	if gw.opts.DisableQueryNullFilteredIndexCheck {
 		emulatorArgs = append(emulatorArgs, "--disable_query_null_filtered_index_check")
 	}
+	if gw.opts.RemoteFunctionsHostPort != "" {
+		if !strings.HasPrefix(gw.opts.RemoteFunctionsHostPort, "localhost:") {
+			log.Fatal("Flag remote_functions_host_port must be `localhost:<port>`")
+		}
+
+		emulatorArgs = append(emulatorArgs, "--remote_functions_host_port", gw.opts.RemoteFunctionsHostPort)
+	}
 	emulatorArgs = append(emulatorArgs,
 		fmt.Sprintf("--override_max_databases_per_instance=%d",
 			gw.opts.OverrideMaxDatabasesPerInstance))
 	emulatorArgs = append(emulatorArgs,
 		fmt.Sprintf("--override_change_stream_partition_token_alive_seconds=%d",
 			gw.opts.OverrideChangeStreamPartitionTokenAliveSeconds))
+
 
 	cmd := exec.Command(gw.opts.FrontendBinary, emulatorArgs...)
 
@@ -121,6 +132,7 @@ func (gw *Gateway) Run() {
 		log.Println("Shutting down gateway server since grpc server is terminated.")
 		os.Exit(cmd.ProcessState.ExitCode())
 	}()
+
 
 	// Wait for the grpc server to be up.
 	ctx := context.Background()
@@ -159,6 +171,7 @@ func (gw *Gateway) Run() {
 		log.Fatal(err)
 	}
 }
+
 
 func waitForReady(ctx context.Context, endpoint string) error {
 	timeout := 30 * time.Second
