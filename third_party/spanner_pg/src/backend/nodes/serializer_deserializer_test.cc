@@ -479,9 +479,6 @@ TEST_F(SerializationDeserializationTest, IndexElem) {
   EXPECT_THAT(index_elem, CanSerializeAndDeserialize());
 }
 
-  EXPECT_THAT(delete_stmt, CanSerializeAndDeserialize());
-}
-
 TEST_F(SerializationDeserializationTest, IndexStmt) {
   IndexStmt* index_stmt = makeNode(IndexStmt);
 

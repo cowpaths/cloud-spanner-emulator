@@ -56,7 +56,9 @@ cc_binary(
         "-fexceptions",
     ],
     linkopts = select({
-        "@bazel_tools//src/conditions:darwin": [],
+        "@bazel_tools//src/conditions:darwin": [
+            "-Wl,-undefined,dynamic_lookup",
+        ],
         "//conditions:default": [
             "-Wl,--version-script=$(location :exports.ld)",
             "-Wl,--undefined-version",

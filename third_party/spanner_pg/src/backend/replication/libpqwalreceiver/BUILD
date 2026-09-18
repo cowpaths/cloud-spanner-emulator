@@ -57,6 +57,7 @@ cc_binary(
     linkopts = select({
         "@bazel_tools//src/conditions:darwin": [
             "-Wl,-rpath,@loader_path",
+            "-Wl,-undefined,dynamic_lookup",
         ],
         "//conditions:default": [
             "-Wl,--version-script=$(location :exports.ld)",
