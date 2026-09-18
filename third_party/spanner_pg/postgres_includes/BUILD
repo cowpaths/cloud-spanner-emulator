@@ -117,7 +117,7 @@ genrule(
         "nodes.inc",
     ],
     cmd = """\
-        sed -rn "s/^\\s+T_([A-Za-z0-9_]+)\\s*=.*,$$/NODE(\\1)/p" \
+        sed -rn "s/^[[:space:]]+T_([A-Za-z0-9_]+)[[:space:]]*=.*,$$/NODE(\\1)/p" \
             < $(location //third_party/spanner_pg/src/backend/nodes:nodetags.h) \
             | sort > $(location nodes.inc)
     """,
