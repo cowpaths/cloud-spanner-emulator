@@ -68,8 +68,16 @@ using ::postgres_translator::test::ValidMemoryContextParameterized;
 constexpr char kUTF8ContinuationByteMinVal = 0b10000000;
 constexpr char kUTF8ContinuationByteMaxVal = 0b10111111;
 
+// A `kMaxPGJSONBNumericWholeDigits`-digit string of all 9s is not safe in
+// general: kMaxPGJSONBNumericWholeDigits is sized to fit long double's own
+// max value (e.g. DBL_MAX's 309-digit decimal expansion on platforms where
+// long double is double), but an all-9s number at that same digit count
+// (10^N - 1) is larger than any max value whose leading digits aren't
+// themselves all 9s - true for both DBL_MAX (~1.798e308) and LDBL_MAX on
+// x86_64 (~1.19e4932). Use one fewer digit, which is always safe: an
+// (N-1)-digit number is guaranteed less than 10^(N-1) <= the true max.
 const googlesql_base::NoDestructor<std::string> kMaxValuePGJSONBString(
-    StrCat(std::string(kMaxPGJSONBNumericWholeDigits, '9'), ".",
+    StrCat(std::string(kMaxPGJSONBNumericWholeDigits - 1, '9'), ".",
            std::string(kMaxPGJSONBNumericFractionalDigits, '9')));
 
 absl::StatusOr<std::string> ReadJsonFile(std::string path) {
@@ -223,10 +231,17 @@ INSTANTIATE_TEST_SUITE_P(
         TestCase{.input = "-0.000000000001400",
                  .expected_output = "-0.000000000001400"},
         TestCase{.input = "7.3e-12", .expected_output = "0.0000000000073"},
-        TestCase{.input = "9e4931",
-                 .expected_output = StrCat("9", std::string(4931, '0'))},
-        TestCase{.input = "-9e4931",
-                 .expected_output = StrCat("-9", std::string(4931, '0'))},
+        // "1e{max_exponent10}" (i.e. 10^max_exponent10) is guaranteed
+        // representable by the definition of max_exponent10, on any
+        // platform - unlike a leading digit of 9 at the same exponent,
+        // which can exceed the true max value (see kMaxValuePGJSONBString).
+        TestCase{.input = StrCat("1e", kMaxPGJSONBNumericWholeDigits - 1),
+                 .expected_output = StrCat(
+                     "1", std::string(kMaxPGJSONBNumericWholeDigits - 1, '0'))},
+        TestCase{.input = StrCat("-1e", kMaxPGJSONBNumericWholeDigits - 1),
+                 .expected_output = StrCat(
+                     "-1",
+                     std::string(kMaxPGJSONBNumericWholeDigits - 1, '0'))},
         TestCase{.input = *kMaxValuePGJSONBString,
                  .expected_output = *kMaxValuePGJSONBString},
         TestCase{.input = StrCat("-", *kMaxValuePGJSONBString),
@@ -364,8 +379,10 @@ INSTANTIATE_TEST_SUITE_P(
     ErrorTestValues, ParsingErrorTest,
     testing::Values("[1,2,[1,2, [1,2], 1,2]",  // Missing a ']'
                     "23AAzsdf",  // Nonsense that isn't a value value
-                    "1e4932",    // Positive number with too many digits
-                    "-1e4932",   // Negative number with too many digits
+                    StrCat("1e", kMaxPGJSONBNumericWholeDigits),
+                    // Positive number with too many digits
+                    StrCat("-1e", kMaxPGJSONBNumericWholeDigits),
+                    // Negative number with too many digits
                     "\"\\320\\224, \\xD0\\x94\"",  // Invalid escape sequences
                     "}", "{", "\"\\u0000\"", "{\"\\u0000\": \"string\"}",
                     "{\"\test\u0000key\": \"\test\u0000value\"}"));
@@ -467,7 +484,23 @@ TEST_F(PostgresComparisonTest, InvalidJsonbValues) {
 }
 
 TEST_F(PostgresComparisonTest, RandomJSONTest) {
-  RandomJsonCreator random_json_creator;
+  // Cap generated whole-number digit counts at what our JSONB parser can
+  // actually represent (bounded by `long double`'s exponent range on the
+  // current platform - see kMaxPGJSONBNumericWholeDigits), so this fuzz test
+  // compares our parser against real Postgres within our own supported
+  // range instead of past it. The default (1000) fits comfortably under the
+  // x86_64 long double range (~4932) but not AArch64's (~308, since
+  // `long double` there is just `double`).
+  //
+  // Use one fewer digit than kMaxPGJSONBNumericWholeDigits: that constant
+  // is sized to fit long double's own max value's digit count, but a
+  // *random* number at that same digit count can still exceed the true max
+  // (e.g. a random leading digit of 9 vs DBL_MAX's leading "1.798..."). An
+  // (N-1)-digit number is always < 10^(N-1) <= the true max, regardless of
+  // its digits.
+  RandomJsonCreator::Options options;
+  options.max_whole_number_digits = kMaxPGJSONBNumericWholeDigits - 1;
+  RandomJsonCreator random_json_creator(options);
   SCOPED_TRACE(
       StrCat("Random JSON with seed ", random_json_creator.GetSeed(), ")"));
   for (int i = 0; i < 1000; ++i) {

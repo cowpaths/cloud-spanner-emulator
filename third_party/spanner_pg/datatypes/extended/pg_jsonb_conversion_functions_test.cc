@@ -31,6 +31,7 @@
 
 #include "third_party/spanner_pg/datatypes/extended/pg_jsonb_conversion_functions.h"
 
+#include <limits>
 #include <string>
 
 #include "googlesql/public/catalog.h"
@@ -68,9 +69,14 @@ const std::string* const kMaxPGNumericFractionalDigitStr =
 const std::string* const kMaxPGNumericDigitStr = new std::string(
     *kMaxPGNumericWholeDigitStr + "." + *kMaxPGNumericFractionalDigitStr);
 
-// PG Numeric max value supported for PG Jsonb
+// PG Numeric max value supported for PG Jsonb. One fewer digit than
+// kMaxPGJSONBNumericWholeDigits: that constant is sized to fit long
+// double's own max value's digit count (e.g. DBL_MAX's 309 digits), but an
+// all-9s string at that same digit count (10^N - 1) can exceed the true
+// max value itself. An (N-1)-digit all-9s string is always safe: it's <
+// 10^(N-1) <= the true max.
 const std::string* const kMaxPgJsonbNumericWholeDigitStr =
-    new std::string(common::kMaxPGJSONBNumericWholeDigits, '9');
+    new std::string(common::kMaxPGJSONBNumericWholeDigits - 1, '9');
 const std::string* const kMaxPgJsonbNumericFractionalDigitStr =
     new std::string(common::kMaxPGJSONBNumericFractionalDigits, '9');
 const std::string* const kMaxPgJsonbNumericDigitStr =
@@ -294,24 +300,37 @@ TEST(PgJsonbConversionTest, ConvertPgJsonbToDoubleError) {
                    expected_error);
   }
 
+  // These cases probe numbers just past double's range but still within
+  // long double's - they're meant to parse fine as a JSONB/PG numeric
+  // (which goes through long double) and only fail at the later
+  // specifically-double conversion step. That gap only exists when long
+  // double actually has more range than double (e.g. x86_64's 80-bit
+  // extended precision); on platforms where long double is just double
+  // (e.g. AArch64/ARM64, including Apple Silicon), these same inputs
+  // overflow at the parse step itself, before ever reaching the
+  // double-conversion check this is meant to test.
   std::vector<std::pair<std::string, std::string>>
-      double_out_of_range_test_cases = {
-          {"1.7976931348623159E+308",
-           absl::StrCat("\"", "17976931348623159", std::string(292, '0'),
-                        "\" is out of range for type double "
-                        "precision")},
-          {"-1.7976931348623159E+308",
-           absl::StrCat("\"-", "17976931348623159", std::string(292, '0'),
-                        "\" is out of range for type double "
-                        "precision")},
-          {"1.7976931348623157E+309",
-           absl::StrCat("\"", "17976931348623157", std::string(293, '0'),
-                        "\" is out of range for type double "
-                        "precision")},
-          {"-1.7976931348623158E+309",
-           absl::StrCat("\"-", "17976931348623158", std::string(293, '0'),
-                        "\" is out of range for type double "
-                        "precision")}};
+      double_out_of_range_test_cases;
+  if constexpr (std::numeric_limits<long double>::max_exponent10 >
+                std::numeric_limits<double>::max_exponent10) {
+    double_out_of_range_test_cases = {
+        {"1.7976931348623159E+308",
+         absl::StrCat("\"", "17976931348623159", std::string(292, '0'),
+                      "\" is out of range for type double "
+                      "precision")},
+        {"-1.7976931348623159E+308",
+         absl::StrCat("\"-", "17976931348623159", std::string(292, '0'),
+                      "\" is out of range for type double "
+                      "precision")},
+        {"1.7976931348623157E+309",
+         absl::StrCat("\"", "17976931348623157", std::string(293, '0'),
+                      "\" is out of range for type double "
+                      "precision")},
+        {"-1.7976931348623158E+309",
+         absl::StrCat("\"-", "17976931348623158", std::string(293, '0'),
+                      "\" is out of range for type double "
+                      "precision")}};
+  }
   for (const auto& [input, expected_error] : double_out_of_range_test_cases) {
     SCOPED_TRACE(
         absl::StrCat("input:", input, " expected_error: ", expected_error));

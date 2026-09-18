@@ -180,8 +180,14 @@ class GCloudInstanceAdminTest(emulator.TestCase):
         '--nodes',
         '1',
     )
+    # Match a variable number of fractional-second digits, not exactly 9:
+    # protobuf's canonical JSON Timestamp encoding only emits as many
+    # fractional digits as needed (0, 3, 6, or 9), and the emulator's Clock
+    # is intentionally truncated to microsecond resolution (matching real
+    # Cloud Spanner commit timestamps), so the trailing all-zero nanosecond
+    # group is dropped, yielding 6 digits rather than 9.
     time_format = (
-        r"'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}.[0-9]{9}Z'"
+        r"'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}.[0-9]+Z'"
     )
     self.assertRegex(
         self.RunGCloud(

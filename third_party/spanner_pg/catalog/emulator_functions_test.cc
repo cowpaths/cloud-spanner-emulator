@@ -3931,8 +3931,14 @@ TEST_F(EmulatorFunctionsTest,
 
 class EvalToJsonbTest : public EmulatorFunctionsTest {
  protected:
+  // One fewer than kMaxPGJSONBNumericWholeDigits: that constant is sized to
+  // fit long double's own max value's digit count (e.g. DBL_MAX's 309
+  // digits), but an all-9s string at that same digit count (10^N - 1) can
+  // exceed the true max value itself (whose leading digits aren't
+  // necessarily all 9s). An (N-1)-digit all-9s string is always safe:
+  // it's < 10^(N-1) <= the true max.
   const std::string kMaxPgJsonbNumericWholeDigitStr = std::string(
-      spangres::datatypes::common::kMaxPGJSONBNumericWholeDigits, '9');
+      spangres::datatypes::common::kMaxPGJSONBNumericWholeDigits - 1, '9');
   const std::string kMaxPgJsonbNumericFractionalDigitStr = std::string(
       spangres::datatypes::common::kMaxPGJSONBNumericFractionalDigits, '9');
   const std::string kMaxPgJsonbNumericDigitStr =
