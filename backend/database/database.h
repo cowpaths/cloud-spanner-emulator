@@ -134,7 +134,7 @@ class Database {
   // Accessors for persistence support.
   Storage* storage() { return storage_.get(); }
   const std::string& database_id() const { return database_id_; }
-  zetasql::TypeFactory* type_factory() { return type_factory_.get(); }
+  googlesql::TypeFactory* type_factory() { return type_factory_.get(); }
 
   // ID generator accessors for persistence save/restore.
   TransactionIDGenerator& transaction_id_generator() {

@@ -84,6 +84,11 @@ build --copt=-Wno-deprecated-declarations
 build --copt=-Wno-return-type
 build --copt=-Wno-unused-but-set-parameter
 
+# Disable strict layering_check: several third-party BUILD files (e.g. grpc's
+# src/core:periodic_update) don't declare deps on every header they include,
+# which layering_check rejects.
+build --features=-layering_check
+
 # =============================================================================
 # 5. TEST SETTINGS
 # =============================================================================

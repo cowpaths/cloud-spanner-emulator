@@ -172,6 +172,8 @@ genrule(
         ENGINE_CATALOG_PATH=third_party/spanner_pg/bootstrap_catalog/spanner_pg_data
 
         # Copies generated files into the engine catalog path
+        # Force-remove any existing read-only outputs from prior runs.
+        rm -f $$ENGINE_CATALOG_PATH/pg_aggregate.dat $$ENGINE_CATALOG_PATH/pg_proc.dat
         cp $(location //third_party/spanner_pg/codegen:pg_aggregate.dat) $$ENGINE_CATALOG_PATH
         cp $(location //third_party/spanner_pg/codegen:pg_proc.dat) $$ENGINE_CATALOG_PATH
 
