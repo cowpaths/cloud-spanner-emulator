@@ -14,8 +14,22 @@
 # with "absolute path inclusion(s) found". This wrapper patches the
 # generated cc_toolchain's cxx_builtin_include_directories to add the SDK
 # root(s) it already references as subdirectories.
+#
+# Which of possibly several local_config_cc-like repos (plain
+# "local_config_cc", the bzlmod-mapped "rules_cc~~cc_configure_extension~
+# local_config_cc", etc.) actually gets fetched depends on which toolchains
+# (target vs. exec platform) the build graph resolves, and on a cold
+# output_base that's only fully discovered by actually compiling - a
+# --nobuild analysis-only pass never triggers this error, and never
+# materializes the "for tool" exec toolchain repos that only get created
+# once something actually tries to build a host-tool dependency with them.
+# So for a build/test/run/coverage command, prime with a real
+# `--keep_going` run of the SAME targets first, patching and retrying
+# (bounded) until that stops hitting this error, before running the actual
+# command - which then finds everything already fixed (and, incidentally,
+# already built, so it's fast).
 
-set -euo pipefail
+set -uo pipefail
 
 fix_cc_binaries() {
   local output_base="$1"
@@ -78,20 +92,57 @@ patch_sdk_builtin_dirs() {
   done < <(find "${output_base}/external" -maxdepth 1 -iname "*local_config_cc*" -type d 2>/dev/null | sed 's#$#/BUILD#')
 }
 
-# Fix wrapped_clang LC_UUID and SDK builtin include dirs on macOS if needed.
-if [[ "$(uname)" == "Darwin" ]]; then
-  OUTPUT_BASE="$("${BAZEL_REAL}" info output_base 2>/dev/null || true)"
+is_darwin_sdk_absolute_path_error() {
+  grep -q "absolute path inclusion(s) found" "$1" 2>/dev/null && grep -q "SDKSettings.json" "$1" 2>/dev/null
+}
 
-  if [[ -n "${OUTPUT_BASE}" ]]; then
-    # If local_config_cc doesn't exist yet, trigger its creation with a
-    # no-build query so we can fix it before any real compilation happens.
-    if [[ ! -f "${OUTPUT_BASE}/external/local_config_cc/wrapped_clang" ]]; then
-      "${BAZEL_REAL}" build --nobuild @local_config_cc//:builtin_include_directory_paths 2>/dev/null || true
+if [[ "$(uname)" != "Darwin" ]]; then
+  exec "${BAZEL_REAL}" "$@"
+fi
+
+OUTPUT_BASE="$("${BAZEL_REAL}" info output_base 2>/dev/null || true)"
+if [[ -n "${OUTPUT_BASE}" ]]; then
+  fix_cc_binaries "${OUTPUT_BASE}"
+  patch_sdk_builtin_dirs "${OUTPUT_BASE}"
+
+  # Find the bazel command verb - the first argument that isn't itself a
+  # startup option (e.g. `--output_base=...` can precede it). Only
+  # build/test/run/coverage actually compile anything, so only those are
+  # worth priming.
+  command_index=0
+  command=""
+  for ((i = 1; i <= $#; i++)); do
+    arg="${!i}"
+    if [[ "${arg}" != -* ]]; then
+      command="${arg}"
+      command_index=${i}
+      break
     fi
+  done
 
-    fix_cc_binaries "${OUTPUT_BASE}"
-    patch_sdk_builtin_dirs "${OUTPUT_BASE}"
-  fi
+  case "${command}" in
+    build|test|run|coverage)
+      if [[ $# -gt ${command_index} ]]; then
+        priming_args=("${@:1:command_index-1}" "${command}" "--keep_going" "${@:command_index+1}")
+        LOG="$(mktemp)"
+        trap 'rm -f "${LOG}"' EXIT
+        attempt=0
+        max_attempts=6
+        while [[ ${attempt} -lt ${max_attempts} ]]; do
+          attempt=$((attempt + 1))
+          set +o pipefail
+          "${BAZEL_REAL}" "${priming_args[@]}" 2>&1 | tee "${LOG}"
+          set -o pipefail
+          if ! is_darwin_sdk_absolute_path_error "${LOG}"; then
+            break
+          fi
+          echo "INFO: Priming pass ${attempt} hit macOS SDK absolute-path-inclusion failures; patching and repriming." >&2
+          fix_cc_binaries "${OUTPUT_BASE}"
+          patch_sdk_builtin_dirs "${OUTPUT_BASE}"
+        done
+      fi
+      ;;
+  esac
 fi
 
 exec "${BAZEL_REAL}" "$@"

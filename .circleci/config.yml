@@ -40,8 +40,8 @@ commands:
     steps:
       - restore_cache:
           keys:
-            - bazel-v1-<< parameters.platform >>-{{ checksum "WORKSPACE" }}-{{ checksum ".bazelversion" }}
-            - bazel-v1-<< parameters.platform >>-{{ checksum "WORKSPACE" }}
+            - bazel-v1-<< parameters.platform >>-{{ checksum "MODULE.bazel" }}-{{ checksum ".bazelversion" }}
+            - bazel-v1-<< parameters.platform >>-{{ checksum "MODULE.bazel" }}
             - bazel-v1-<< parameters.platform >>-
       - run:
           name: Prune large files from Bazel disk cache
@@ -63,7 +63,7 @@ commands:
         type: string
     steps:
       - save_cache:
-          key: bazel-v1-<< parameters.platform >>-{{ checksum "WORKSPACE" }}-{{ checksum ".bazelversion" }}-{{ epoch }}
+          key: bazel-v1-<< parameters.platform >>-{{ checksum "MODULE.bazel" }}-{{ checksum ".bazelversion" }}-{{ epoch }}
           paths:
             - /tmp/bazel-disk-cache
 
