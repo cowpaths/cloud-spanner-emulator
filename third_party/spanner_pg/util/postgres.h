@@ -34,7 +34,7 @@
 
 #include <string>
 
-#include "zetasql/base/logging.h"
+#include "googlesql/base/logging.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
@@ -207,6 +207,10 @@ absl::StatusOr<RowMarkClause*> makeRowMarkClause(Index rti,
                                                  LockClauseStrength strength,
                                                  LockWaitPolicy wait_policy,
                                                  bool pushed_down);
+
+// Mostly a copy of textToQualifiedNameList except that the input is a char*
+// instead of a text*.
+absl::StatusOr<List*> makeQualifiedNameList(char* rawname);
 
 // Returns true if the input Node is an expression.
 bool IsExpr(const Node& input);

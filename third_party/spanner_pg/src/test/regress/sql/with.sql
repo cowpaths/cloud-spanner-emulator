@@ -347,6 +347,18 @@ UNION ALL
 SELECT t1.id, t2.path, t2 FROM t AS t1 JOIN t AS t2 ON
 (t1.id=t2.id);
 
+CREATE TEMP TABLE duplicates (a INT NOT NULL);
+INSERT INTO duplicates VALUES(1), (1);
+
+-- Try out a recursive UNION case where the non-recursive part's table slot
+-- uses TTSOpsBufferHeapTuple and contains duplicate rows.
+WITH RECURSIVE cte (a) as (
+	SELECT a FROM duplicates
+	UNION
+	SELECT a FROM cte
+)
+SELECT a FROM cte;
+
 -- SEARCH clause
 
 create temp table graph0( f int, t int, label text );
@@ -918,6 +930,13 @@ WITH RECURSIVE x(n) AS (
   ORDER BY (SELECT n FROM x))
 	SELECT * FROM x;
 
+-- and this
+WITH RECURSIVE x(n) AS (
+  WITH sub_cte AS (SELECT * FROM x)
+  DELETE FROM graph RETURNING f)
+	SELECT * FROM x;
+
+
 CREATE TEMPORARY TABLE y (a INTEGER);
 INSERT INTO y SELECT generate_series(1, 10);
 
@@ -1044,6 +1063,30 @@ from int4_tbl;
 select ( with cte(foo) as ( values(f1) )
           values((select foo from cte)) )
 from int4_tbl;
+
+--
+-- test for bug #19055: interaction of WITH with aggregates
+--
+-- For now, we just throw an error if there's a use of a CTE below the
+-- semantic level that the SQL standard assigns to the aggregate.
+-- It's not entirely clear what we could do instead that doesn't risk
+-- breaking more things than it fixes.
+select f1, (with cte1(x,y) as (select 1,2)
+            select count((select i4.f1 from cte1))) as ss
+from int4_tbl i4;
+
+--
+-- test for bug #19106: interaction of WITH with aggregates
+--
+-- the initial fix for #19055 was too aggressive and broke this case
+explain (verbose, costs off)
+with a as ( select id from (values (1), (2)) as v(id) ),
+     b as ( select max((select sum(id) from a)) as agg )
+select agg from b;
+
+with a as ( select id from (values (1), (2)) as v(id) ),
+     b as ( select max((select sum(id) from a)) as agg )
+select agg from b;
 
 --
 -- test for nested-recursive-WITH bug
@@ -1259,7 +1302,7 @@ INSERT INTO bug6051 SELECT * FROM t1;
 SELECT * FROM bug6051;
 SELECT * FROM bug6051_2;
 
--- check INSERT...SELECT rule actions are disallowed on commands
+-- check INSERT ... SELECT rule actions are disallowed on commands
 -- that have modifyingCTEs
 CREATE OR REPLACE RULE bug6051_ins AS ON INSERT TO bug6051 DO INSTEAD
  INSERT INTO bug6051_2
@@ -1275,7 +1318,7 @@ CREATE TEMP TABLE bug6051_3 AS
 CREATE RULE bug6051_3_ins AS ON INSERT TO bug6051_3 DO INSTEAD
   SELECT i FROM bug6051_2;
 
-BEGIN; SET LOCAL force_parallel_mode = on;
+BEGIN; SET LOCAL debug_parallel_query = on;
 
 WITH t1 AS ( DELETE FROM bug6051_3 RETURNING * )
   INSERT INTO bug6051_3 SELECT * FROM t1;
@@ -1283,6 +1326,29 @@ WITH t1 AS ( DELETE FROM bug6051_3 RETURNING * )
 COMMIT;
 
 SELECT * FROM bug6051_3;
+
+-- check that recursive CTE processing doesn't rewrite a CTE more than once
+-- (must not try to expand GENERATED ALWAYS IDENTITY columns more than once)
+CREATE TEMP TABLE id_alw1 (i int GENERATED ALWAYS AS IDENTITY);
+
+CREATE TEMP TABLE id_alw2 (i int GENERATED ALWAYS AS IDENTITY);
+CREATE TEMP VIEW id_alw2_view AS SELECT * FROM id_alw2;
+
+CREATE TEMP TABLE id_alw3 (i int GENERATED ALWAYS AS IDENTITY);
+CREATE RULE id_alw3_ins AS ON INSERT TO id_alw3 DO INSTEAD
+  WITH t1 AS (INSERT INTO id_alw1 DEFAULT VALUES RETURNING i)
+    INSERT INTO id_alw2_view DEFAULT VALUES RETURNING i;
+CREATE TEMP VIEW id_alw3_view AS SELECT * FROM id_alw3;
+
+CREATE TEMP TABLE id_alw4 (i int GENERATED ALWAYS AS IDENTITY);
+
+WITH t4 AS (INSERT INTO id_alw4 DEFAULT VALUES RETURNING i)
+  INSERT INTO id_alw3_view DEFAULT VALUES RETURNING i;
+
+SELECT * from id_alw1;
+SELECT * from id_alw2;
+SELECT * from id_alw3;
+SELECT * from id_alw4;
 
 -- check case where CTE reference is removed due to optimization
 EXPLAIN (VERBOSE, COSTS OFF)

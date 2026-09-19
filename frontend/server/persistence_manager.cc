@@ -26,9 +26,9 @@
 
 #include "google/spanner/admin/database/v1/common.pb.h"
 #include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
-#include "zetasql/public/type.h"
-#include "zetasql/public/value.h"
-#include "zetasql/base/logging.h"
+#include "googlesql/public/type.h"
+#include "googlesql/public/value.h"
+#include "googlesql/base/logging.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/time/time.h"
@@ -317,7 +317,7 @@ absl::Status PersistenceManager::ReplayEntry(
 
       std::vector<std::string> column_ids(write.column_ids().begin(),
                                           write.column_ids().end());
-      std::vector<zetasql::Value> values;
+      std::vector<googlesql::Value> values;
       values.reserve(write.values_size());
       for (const auto& pv : write.values()) {
         auto value_or = backend::DeserializeValue(pv, type_factory);

@@ -1,5 +1,5 @@
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "third_party/spanner_pg/interface/ereport.h"
 #include "third_party/spanner_pg/postgres_includes/all.h"  // IWYU pragma: keep
 #include "third_party/spanner_pg/util/valid_memory_context_fixture.h"

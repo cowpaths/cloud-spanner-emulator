@@ -28,11 +28,12 @@
 #include "google/spanner/v1/spanner.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/time/time.h"
 #include "google/cloud/spanner/admin/database_admin_client.h"
 #include "google/cloud/spanner/client.h"
@@ -54,7 +55,7 @@
 #include "tests/conformance/common/environment.h"
 #include "grpcpp/client_context.h"
 #include "absl/status/status.h"
-#include "zetasql/base/status_macros.h"
+#include "googlesql/base/status_macros.h"
 
 namespace google {
 namespace spanner {
@@ -228,6 +229,16 @@ class DatabaseTest : public ::testing::Test {
     return database_admin_stub_.get();
   }
 
+  // Returns the long-operation identified by `operation_uri` in `op`.
+  absl::Status GetOperation(absl::string_view operation_uri,
+                            operations_api::Operation* op);
+
+  // Waits for the long-running operation identified by `operation_uri` to
+  // finish.
+  absl::Status WaitForOperation(absl::string_view operation_uri,
+                                operations_api::Operation* op,
+                                absl::Duration deadline = absl::Seconds(50));
+
   // The client library requires explicit construction of Value objects which
   // is cumbersome for unit tests. This class acts as a proxy for implicitly
   // converting a list of C++ objects into client library Value objects.
@@ -286,23 +297,23 @@ class DatabaseTest : public ::testing::Test {
 
   // Returns a matcher for a set of rows returned by client library.
   auto IsOkAndHoldsRows(const std::vector<ValueRow>& rows) {
-    return zetasql_base::testing::IsOkAndHolds(testing::ElementsAreArray(rows));
+    return googlesql_base::testing::IsOkAndHolds(testing::ElementsAreArray(rows));
   }
 
   // Returns a matcher for an unordered set of rows returned by client library.
   auto IsOkAndHoldsUnorderedRows(const std::vector<ValueRow>& rows) {
-    return zetasql_base::testing::IsOkAndHolds(
+    return googlesql_base::testing::IsOkAndHolds(
         testing::UnorderedElementsAreArray(rows));
   }
 
   // Same as above, but used when there is only one row.
   auto IsOkAndHoldsRow(const ValueRow& row) {
-    return zetasql_base::testing::IsOkAndHolds(testing::ElementsAre(row));
+    return googlesql_base::testing::IsOkAndHolds(testing::ElementsAre(row));
   }
 
   // Returns a matcher for a super set of rows returned by client library.
   auto IsOkAndContainsRows(const std::vector<ValueRow>& rows) {
-    return zetasql_base::testing::IsOkAndHolds(testing::IsSupersetOf(rows));
+    return googlesql_base::testing::IsOkAndHolds(testing::IsSupersetOf(rows));
   }
 
   // Converts a list of literal key parts into a Key.
@@ -369,7 +380,7 @@ class DatabaseTest : public ::testing::Test {
                                              KeySet key_set, Transaction txn) {
     auto result = client().Read(std::move(txn), std::move(table),
                                 std::move(key_set), std::move(columns));
-    ZETASQL_ASSIGN_OR_RETURN(auto read_result, ProcessRowStreamForReadResult(result));
+    GOOGLESQL_ASSIGN_OR_RETURN(auto read_result, ProcessRowStreamForReadResult(result));
     return read_result.values;
   }
 
@@ -387,7 +398,7 @@ class DatabaseTest : public ::testing::Test {
   absl::StatusOr<std::vector<ValueRow>> Read(
       Transaction::SingleUseOptions transaction_options, std::string table,
       std::vector<std::string> columns, KeySet key_set) {
-    ZETASQL_ASSIGN_OR_RETURN(auto read_result,
+    GOOGLESQL_ASSIGN_OR_RETURN(auto read_result,
                      Read(std::move(table), std::move(columns),
                           std::move(key_set), std::move(transaction_options)));
     return read_result.values;
@@ -417,7 +428,7 @@ class DatabaseTest : public ::testing::Test {
     options.index_name = std::move(index);
     auto result = client().Read(std::move(table), std::move(key_set),
                                 std::move(columns), options);
-    ZETASQL_ASSIGN_OR_RETURN(auto read_result, ProcessRowStreamForReadResult(result));
+    GOOGLESQL_ASSIGN_OR_RETURN(auto read_result, ProcessRowStreamForReadResult(result));
     return read_result.values;
   }
 
@@ -430,7 +441,7 @@ class DatabaseTest : public ::testing::Test {
     auto result =
         client().Read(std::move(txn), std::move(table), std::move(key_set),
                       std::move(columns), options);
-    ZETASQL_ASSIGN_OR_RETURN(auto read_result, ProcessRowStreamForReadResult(result));
+    GOOGLESQL_ASSIGN_OR_RETURN(auto read_result, ProcessRowStreamForReadResult(result));
     return read_result.values;
   }
 
@@ -471,7 +482,7 @@ class DatabaseTest : public ::testing::Test {
     std::vector<ValueRow> rows;
     for (const auto& partition : partitions) {
       auto result = client().Read(std::move(partition));
-      ZETASQL_ASSIGN_OR_RETURN(auto read_result, ProcessRowStreamForReadResult(result));
+      GOOGLESQL_ASSIGN_OR_RETURN(auto read_result, ProcessRowStreamForReadResult(result));
       for (const auto& row : read_result.values) {
         rows.push_back(row);
       }
@@ -542,7 +553,7 @@ class DatabaseTest : public ::testing::Test {
     std::vector<ValueRow> rows;
     for (const auto& partition : partitions) {
       auto result = client().ExecuteQuery(std::move(partition));
-      ZETASQL_ASSIGN_OR_RETURN(auto read_result, ProcessRowStreamForReadResult(result));
+      GOOGLESQL_ASSIGN_OR_RETURN(auto read_result, ProcessRowStreamForReadResult(result));
       for (const auto& row : read_result.values) {
         rows.push_back(row);
       }

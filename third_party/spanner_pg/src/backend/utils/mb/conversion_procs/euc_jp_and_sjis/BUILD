@@ -41,7 +41,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_binary(
     name = "euc_jp_and_sjis.so",
@@ -52,6 +52,12 @@ cc_binary(
         "-D_GNU_SOURCE",
         "-fexceptions",
     ],
+    linkopts = select({
+        "@bazel_tools//src/conditions:darwin": [
+            "-Wl,-undefined,dynamic_lookup",
+        ],
+        "//conditions:default": [],
+    }),
     linkshared = 1,
     linkstatic = 1,
     deps = [

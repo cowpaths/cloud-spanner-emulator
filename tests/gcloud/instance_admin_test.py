@@ -92,6 +92,158 @@ class GCloudInstanceAdminTest(emulator.TestCase):
         self.RunGCloud('spanner', 'instances', 'delete', 'test-instance',
                        '--quiet'), self.JoinLines(''))
 
+  def testCreateInstancePartition(self):
+    self.RunGCloud(
+        'spanner',
+        'instances',
+        'create',
+        'test-instance',
+        '--config=emulator-config',
+        '--description=Test Instance',
+        '--nodes',
+        '3',
+    )
+    self.assertEqual(
+        self.RunGCloud(
+            'spanner',
+            'instance-partitions',
+            'create',
+            'test-partition',
+            '--instance=test-instance',
+            '--config=emulator-config',
+            '--description=Test Partition',
+            '--nodes',
+            '1',
+        ),
+        self.JoinLines(''),
+    )
+
+  def testListInstancePartitions(self):
+    self.RunGCloud(
+        'spanner',
+        'instances',
+        'create',
+        'test-instance',
+        '--config=emulator-config',
+        '--description=Test Instance',
+        '--nodes',
+        '3',
+    )
+    self.RunGCloud(
+        'spanner',
+        'instance-partitions',
+        'create',
+        'test-partition',
+        '--instance=test-instance',
+        '--config=emulator-config',
+        '--description=Test Partition',
+        '--nodes',
+        '1',
+    )
+
+    self.assertEqual(
+        self.RunGCloud(
+            'spanner',
+            'instance-partitions',
+            'list',
+            '--instance=test-instance',
+            '--format',
+            'table(name, displayName, config, nodeCount, state)',
+        ),
+        self.JoinLines(
+            'NAME            DISPLAY_NAME    CONFIG           NODE_COUNT'
+            '  STATE',
+            'test-partition  Test Partition  emulator-config  1          '
+            ' READY',
+        ),
+    )
+
+  def testDescribeInstancePartition(self):
+    self.RunGCloud(
+        'spanner',
+        'instances',
+        'create',
+        'test-instance',
+        '--config=emulator-config',
+        '--description=Test Instance',
+        '--nodes',
+        '3',
+    )
+    self.RunGCloud(
+        'spanner',
+        'instance-partitions',
+        'create',
+        'test-partition',
+        '--instance=test-instance',
+        '--config=emulator-config',
+        '--description=Test Partition',
+        '--nodes',
+        '1',
+    )
+    # Match a variable number of fractional-second digits, not exactly 9:
+    # protobuf's canonical JSON Timestamp encoding only emits as many
+    # fractional digits as needed (0, 3, 6, or 9), and the emulator's Clock
+    # is intentionally truncated to microsecond resolution (matching real
+    # Cloud Spanner commit timestamps), so the trailing all-zero nanosecond
+    # group is dropped, yielding 6 digits rather than 9.
+    time_format = (
+        r"'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}.[0-9]+Z'"
+    )
+    self.assertRegex(
+        self.RunGCloud(
+            'spanner',
+            'instance-partitions',
+            'describe',
+            'test-partition',
+            '--instance=test-instance',
+        ),
+        self.JoinLines(
+            'config: projects/test-project/instanceConfigs/emulator-config',
+            r'createTime: {}'.format(time_format),
+            'displayName: Test Partition',
+            'name:'
+            ' projects/test-project/instances/test-instance/instancePartitions/test-partition',
+            'nodeCount: 1',
+            'state: READY',
+            r'updateTime: {}'.format(time_format),
+        ),
+    )
+
+  def testDeleteInstancePartition(self):
+    self.RunGCloud(
+        'spanner',
+        'instances',
+        'create',
+        'test-instance',
+        '--config=emulator-config',
+        '--description=Test Instance',
+        '--nodes',
+        '3',
+    )
+    self.RunGCloud(
+        'spanner',
+        'instance-partitions',
+        'create',
+        'test-partition',
+        '--instance=test-instance',
+        '--config=emulator-config',
+        '--description=Test Partition',
+        '--nodes',
+        '1',
+    )
+
+    self.assertEqual(
+        self.RunGCloud(
+            'spanner',
+            'instance-partitions',
+            'delete',
+            'test-partition',
+            '--instance=test-instance',
+            '--quiet',
+        ),
+        self.JoinLines(''),
+    )
+
 
 if __name__ == '__main__':
   emulator.RunTests()

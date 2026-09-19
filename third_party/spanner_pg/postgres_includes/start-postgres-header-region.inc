@@ -56,10 +56,16 @@ extern "C" {
 #undef ERROR
 #pragma push_macro("FATAL")
 #undef FATAL
+#pragma push_macro("NOTICE")
+#undef NOTICE
 #pragma push_macro("PANIC")
 #undef PANIC
 #pragma push_macro("INVALID")
 #undef INVALID
+#pragma push_macro("EPOCH")
+#undef EPOCH
+#pragma push_macro("ZULU")
+#undef ZULU
 #pragma push_macro("NOW")
 #undef NOW
 #pragma push_macro("Abs")
@@ -90,6 +96,23 @@ extern "C" {
 #undef MICROSECOND
 #pragma push_macro("WEEK")
 #undef WEEK
+
+#pragma push_macro("vsnprintf")
+#undef vsnprintf
+#pragma push_macro("snprintf")
+#undef snprintf
+#pragma push_macro("vsprintf")
+#undef vsprintf
+#pragma push_macro("sprintf")
+#undef sprintf
+#pragma push_macro("vfprintf")
+#undef vfprintf
+#pragma push_macro("fprintf")
+#undef fprintf
+#pragma push_macro("vprintf")
+#undef vprintf
+#pragma push_macro("printf")
+#undef printf
 
 // gettext and friends are defined to null in Postgres unless you configure the
 // build with --enable-nls (i.e. language translations). We don't do that.

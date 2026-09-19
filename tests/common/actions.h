@@ -21,9 +21,9 @@
 #include <queue>
 #include <string>
 
-#include "zetasql/public/value.h"
+#include "googlesql/public/value.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/memory/memory.h"
@@ -60,14 +60,23 @@ class TestReadOnlyStore : public ReadOnlyStore {
   absl::StatusOr<bool> PrefixExists(const Table* table,
                                     const Key& prefix_key) const override;
 
+  bool HasPendingCommitTimestamp(const Column* column) const override {
+    return pending_commit_ts_columns_.contains(column);
+  }
+
+  void SetHasPendingCommitTimestamp(const Column* column) {
+    pending_commit_ts_columns_.insert(column);
+  }
+
   absl::Status Insert(const Table* table, const Key& key,
                       absl::Span<const Column* const> columns,
-                      const std::vector<zetasql::Value>& values = {});
+                      const std::vector<googlesql::Value>& values = {});
 
   absl::Status Delete(const Table* table, const Key& key);
 
  private:
   InMemoryStorage store_;
+  absl::flat_hash_set<const Column*> pending_commit_ts_columns_;
 };
 
 // TestEffectsBuffer provides an implementation of EffectsBuffer to test
@@ -79,11 +88,11 @@ class TestEffectsBuffer : public EffectsBuffer {
 
   void Insert(const Table* table, const Key& key,
               const absl::Span<const Column* const> columns,
-              const std::vector<zetasql::Value>& values) override;
+              const std::vector<googlesql::Value>& values) override;
 
   void Update(const Table* table, const Key& key,
               const absl::Span<const Column* const> columns,
-              const std::vector<zetasql::Value>& values) override;
+              const std::vector<googlesql::Value>& values) override;
 
   void Delete(const Table* table, const Key& key) override;
 
@@ -115,10 +124,10 @@ class ActionsTest : public testing::Test {
   // Convenience methods.
   WriteOp Insert(const Table* table, const Key& key,
                  absl::Span<const Column* const> columns = {},
-                 const std::vector<zetasql::Value> values = {});
+                 const std::vector<googlesql::Value> values = {});
   WriteOp Update(const Table* table, const Key& key,
                  absl::Span<const Column* const> columns = {},
-                 const std::vector<zetasql::Value> values = {});
+                 const std::vector<googlesql::Value> values = {});
   WriteOp Delete(const Table* table, const Key& key);
 
  private:

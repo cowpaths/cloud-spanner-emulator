@@ -19,7 +19,7 @@
 
 #include <string>
 
-#include "zetasql/base/no_destructor.h"
+#include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
@@ -47,7 +47,9 @@ extern const char kChangeStreamExcludeInsertOptionName[];
 extern const char kChangeStreamExcludeUpdateOptionName[];
 extern const char kChangeStreamExcludeDeleteOptionName[];
 extern const char kChangeStreamExcludeTtlDeletesOptionName[];
-extern const zetasql_base::NoDestructor<absl::flat_hash_set<std::string>>
+extern const char kChangeStreamAllowTxnExclusionOptionName[];
+extern const char kChangeStreamPartitionModeOptionName[];
+extern const absl::NoDestructor<absl::flat_hash_set<std::string>>
     kChangeStreamBooleanOptions;
 
 extern const char kModelColumnRequiredOptionName[];
@@ -61,6 +63,9 @@ extern const char kReadLeaseRegionsOptionName[];
 extern const char kVersionRetentionPeriodOptionName[];
 extern const char kDefaultSequenceKindOptionName[];
 extern const char kDefaultTimeZoneOptionName[];
+extern const char kColumnarPolicyOptionName[];
+extern const char kFulltextDictionaryTableOptionName[];
+extern const char kScoreVersionOptionName[];
 
 extern const char kLocalityGroupOptionName[];
 extern const char kLocalityGroupStorageOptionName[];

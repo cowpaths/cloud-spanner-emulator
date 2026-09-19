@@ -44,7 +44,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_library(
     name = "transam",
@@ -65,6 +65,7 @@ cc_library(
         "xact.c",
         "xlog.c",
         "xlogarchive.c",
+        "xlogbackup.c",
         "xlogfuncs.c",
         "xloginsert.c",
         "xlogprefetcher.c",

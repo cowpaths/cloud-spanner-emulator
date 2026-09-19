@@ -18,11 +18,11 @@
 #include <string>
 
 #include "google/spanner/admin/database/v1/common.pb.h"
-#include "zetasql/public/analyzer_options.h"
-#include "zetasql/public/types/type_factory.h"
+#include "googlesql/public/analyzer_options.h"
+#include "googlesql/public/types/type_factory.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "backend/query/analyzer_options.h"
@@ -31,11 +31,13 @@
 #include "backend/query/function_catalog.h"
 #include "backend/schema/catalog/schema.h"
 #include "common/constants.h"
+#include "common/feature_flags.h"
 #include "tests/common/schema_constructor.h"
+#include "tests/common/scoped_feature_flags_setter.h"
+#include "googlesql/base/status_macros.h"
 #include "third_party/spanner_pg/interface/emulator_parser.h"
 #include "third_party/spanner_pg/interface/pg_arena.h"
 #include "third_party/spanner_pg/shims/memory_context_pg_arena.h"
-#include "zetasql/base/status_macros.h"
 namespace google {
 namespace spanner {
 namespace emulator {
@@ -55,10 +57,10 @@ class PgQueryableChangeStreamTvfTest : public testing::Test {
  protected:
   // TODO: Add unit tests for change streams in PG once TVF can be
   // analyzed externally in pg.
-  absl::StatusOr<std::unique_ptr<const zetasql::AnalyzerOutput>>
+  absl::StatusOr<std::unique_ptr<const googlesql::AnalyzerOutput>>
   AnalyzePGStatement(const std::string& sql) {
     analyzer_options_.CreateDefaultArenasIfNotSet();
-    ZETASQL_ASSIGN_OR_RETURN(
+    GOOGLESQL_ASSIGN_OR_RETURN(
         std::unique_ptr<postgres_translator::interfaces::PGArena> arena,
         postgres_translator::spangres::MemoryContextPGArena::Init(nullptr));
     return postgres_translator::spangres::ParseAndAnalyzePostgreSQL(
@@ -67,9 +69,20 @@ class PgQueryableChangeStreamTvfTest : public testing::Test {
             &type_factory_, kCloudSpannerEmulatorFunctionCatalogName,
             schema_.get()));
   }
+
+  absl::StatusOr<std::unique_ptr<const Schema>>
+  CreateMutableKeyRangeChangeStreamSchema() {
+    EmulatorFeatureFlags::Flags flags;
+    flags.enable_mutable_key_range_change_stream = true;
+    test::ScopedEmulatorFeatureFlagsSetter setter(flags);
+    return test::CreateSchemaWithOneTableAndOneChangeStream(
+        &type_factory_, database_api::DatabaseDialect::POSTGRESQL,
+        /*is_mutable_key_range=*/true);
+  }
+
   std::unique_ptr<const Schema> schema_ = nullptr;
-  zetasql::TypeFactory type_factory_;
-  zetasql::AnalyzerOptions analyzer_options_;
+  googlesql::TypeFactory type_factory_;
+  googlesql::AnalyzerOptions analyzer_options_;
   const FunctionCatalog fn_catalog_;
   std::unique_ptr<Catalog> catalog_;
 };
@@ -78,10 +91,10 @@ TEST_F(PgQueryableChangeStreamTvfTest, CreateChangeStreamTvfPgOk) {
   const auto* schema_change_stream =
       schema_->FindChangeStream("change_stream_test_table");
   ASSERT_NE(schema_change_stream, nullptr);
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto queryable_tvf,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto queryable_tvf,
                        QueryableChangeStreamTvf::Create(
                            schema_change_stream->tvf_name(), analyzer_options_,
-                           catalog_.get(), &type_factory_, true));
+                           catalog_.get(), &type_factory_, true, false));
   EXPECT_EQ(queryable_tvf->Name(), "read_json_change_stream_test_table");
   EXPECT_EQ(queryable_tvf->result_schema().num_columns(), 1);
   EXPECT_EQ(queryable_tvf->result_schema().column(0).type->DebugString(),
@@ -90,8 +103,30 @@ TEST_F(PgQueryableChangeStreamTvfTest, CreateChangeStreamTvfPgOk) {
 }
 
 TEST_F(PgQueryableChangeStreamTvfTest,
+       CreateMutableKeyRangeChangeStreamTvfPgOk) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(const auto schema,
+                       CreateMutableKeyRangeChangeStreamSchema());
+  const auto* schema_change_stream =
+      schema->FindChangeStream("change_stream_test_table");
+  ASSERT_NE(schema_change_stream, nullptr);
+  FunctionCatalog fn_catalog(
+      &type_factory_, kCloudSpannerEmulatorFunctionCatalogName, schema.get());
+  Catalog catalog(schema.get(), &fn_catalog, &type_factory_, analyzer_options_);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto queryable_tvf,
+                       QueryableChangeStreamTvf::Create(
+                           schema_change_stream->tvf_name(), analyzer_options_,
+                           &catalog, &type_factory_, true, true));
+  EXPECT_EQ(queryable_tvf->Name(), "read_proto_bytes_change_stream_test_table");
+  EXPECT_EQ(queryable_tvf->result_schema().num_columns(), 1);
+  EXPECT_EQ(queryable_tvf->result_schema().column(0).type->DebugString(),
+            "BYTES");
+  EXPECT_EQ(queryable_tvf->GetSignature(0)->arguments().size(), 5);
+}
+
+TEST_F(PgQueryableChangeStreamTvfTest,
        AnalyzeChangeStreamTvfQueryPositionalArg) {
-  ZETASQL_EXPECT_OK(AnalyzePGStatement(
+  GOOGLESQL_EXPECT_OK(AnalyzePGStatement(
       "SELECT * FROM "
       "spanner.read_json_change_stream_test_table ("
       "'2022-09-27T12:30:00.123456Z'::timestamptz,"
@@ -99,7 +134,7 @@ TEST_F(PgQueryableChangeStreamTvfTest,
 }
 
 TEST_F(PgQueryableChangeStreamTvfTest, AnalyzeChangeStreamTvfQueryNamedArg) {
-  ZETASQL_EXPECT_OK(AnalyzePGStatement(
+  GOOGLESQL_EXPECT_OK(AnalyzePGStatement(
       "SELECT * FROM "
       "spanner.read_json_change_stream_test_table ("
       "start_timestamp=>'2022-09-27T12:30:00.123456Z'::timestamptz,"
@@ -117,7 +152,7 @@ TEST_F(PgQueryableChangeStreamTvfTest,
           "spanner.read_json_change_stream_test_table ("
           "'2022-09-27T12:30:00.123456Z'::timestamptz,"
           "NULL::timestamptz, NULL::timestamptz, 1000 , NULL::text[] )"),
-      zetasql_base::testing::StatusIs(
+      googlesql_base::testing::StatusIs(
           absl::StatusCode::kNotFound,
           testing::HasSubstr(
               "No function matches the given name and argument types.")));
@@ -130,7 +165,7 @@ TEST_F(PgQueryableChangeStreamTvfTest,
                          "spanner.read_json_change_stream_test_table ("
                          "'2022-09-27T12:30:00.123456Z'::timestamptz,"
                          "NULL::timestamptz, NULL::text[] )"),
-      zetasql_base::testing::StatusIs(
+      googlesql_base::testing::StatusIs(
           absl::StatusCode::kNotFound,
           testing::HasSubstr(
               "No function matches the given name and argument types.")));
@@ -143,7 +178,7 @@ TEST_F(PgQueryableChangeStreamTvfTest,
           "SELECT * FROM spanner.read_json_null ("
           "'2022-09-27T12:30:00.123456Z'::timestamptz,"
           "NULL::timestamptz, NULL::text, 1000 , NULL::text[] )"),
-      zetasql_base::testing::StatusIs(
+      googlesql_base::testing::StatusIs(
           absl::StatusCode::kNotFound,
           testing::HasSubstr(
               "No function matches the given name and argument types.")));

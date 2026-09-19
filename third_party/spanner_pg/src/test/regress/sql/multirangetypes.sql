@@ -58,6 +58,13 @@ select '{[a,a)}'::textmultirange;
 select '{(a,a]}'::textmultirange;
 select '{(a,a)}'::textmultirange;
 
+-- Also try it with non-error-throwing API
+select pg_input_is_valid('{[1,2], [4,5]}', 'int4multirange');
+select pg_input_is_valid('{[1,2], [4,5]', 'int4multirange');
+select * from pg_input_error_info('{[1,2], [4,5]', 'int4multirange');
+select pg_input_is_valid('{[1,2], [4,zed]}', 'int4multirange');
+select * from pg_input_error_info('{[1,2], [4,zed]}', 'int4multirange');
+
 --
 -- test the constructor
 ---
@@ -694,6 +701,22 @@ drop type textrange1;
 drop type textrange2;
 
 --
+-- CREATE TYPE checks for CREATE on multirange schema
+--
+create role regress_mr;
+create schema mr_sch;
+set role regress_mr;
+create type mytype as range (subtype=int4, multirange_type_name=mr_sch.mr_type);
+reset role;
+grant create on schema mr_sch to regress_mr;
+set role regress_mr;
+create type mytype as range (subtype=int4, multirange_type_name=mr_sch.mr_type);
+reset role;
+drop type mytype;
+drop schema mr_sch;
+drop role regress_mr;
+
+--
 -- Test polymorphic type system
 --
 
@@ -782,10 +805,13 @@ select array[1,3] <@ arraymultirange(arrayrange(array[1,2], array[2,1]));
 create type two_ints as (a int, b int);
 create type two_ints_range as range (subtype = two_ints);
 
--- with force_parallel_mode on, this exercises tqueue.c's range remapping
+-- with debug_parallel_query on, this exercises tqueue.c's range remapping
 select *, row_to_json(upper(t)) as u from
   (values (two_ints_multirange(two_ints_range(row(1,2), row(3,4)))),
           (two_ints_multirange(two_ints_range(row(5,6), row(7,8))))) v(t);
+
+-- this must be rejected to avoid self-inclusion issues:
+alter type two_ints add attribute c two_ints_multirange;
 
 drop type two_ints cascade;
 

@@ -46,7 +46,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_library(
     name = "sort",
@@ -56,6 +56,7 @@ cc_library(
         "sharedtuplestore.c",
         "sortsupport.c",
         "tuplesort.c",
+        "tuplesortvariants.c",
         "tuplestore.c",
     ],
     copts = [

@@ -44,7 +44,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_library(
     name = "activity",
@@ -57,6 +57,7 @@ cc_library(
         "pgstat_checkpointer.c",
         "pgstat_database.c",
         "pgstat_function.c",
+        "pgstat_io.c",
         "pgstat_relation.c",
         "pgstat_replslot.c",
         "pgstat_shmem.c",

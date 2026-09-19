@@ -18,7 +18,7 @@
 
 namespace google::spanner::emulator::backend {
 
-const absl::flat_hash_set<absl::string_view>* SupportedZetaSQLFunctions() {
+const absl::flat_hash_set<absl::string_view>* SupportedGoogleSQLFunctions() {
   static const auto* supported_functions =
       new absl::flat_hash_set<absl::string_view>{
           // clang-format off
@@ -38,6 +38,7 @@ const absl::flat_hash_set<absl::string_view>* SupportedZetaSQLFunctions() {
         "approx_euclidean_distance",
         "array_concat",
         "array_concat_agg",
+        "array_filter",
         "array_first",
         "array_last",
         "array_min",
@@ -48,6 +49,7 @@ const absl::flat_hash_set<absl::string_view>* SupportedZetaSQLFunctions() {
         "array_includes_all",
         "array_is_distinct",
         "array_length",
+        "array_transform",
         "array_reverse",
         "array_to_string",
         "asin",
@@ -130,7 +132,9 @@ const absl::flat_hash_set<absl::string_view>* SupportedZetaSQLFunctions() {
         "$in_array",
         "is_inf",
         "is_nan",
+        "$is_distinct_from",
         "$is_false",
+        "$is_not_distinct_from",
         "$is_null",
         "$is_true",
         "least",
@@ -280,8 +284,8 @@ const absl::flat_hash_set<absl::string_view>* SupportedZetaSQLFunctions() {
   return supported_functions;
 }
 
-bool IsSupportedZetaSQLFunction(const zetasql::Function& function) {
-  return SupportedZetaSQLFunctions()->contains(
+bool IsSupportedGoogleSQLFunction(const googlesql::Function& function) {
+  return SupportedGoogleSQLFunctions()->contains(
       function.FullName(/*include_group=*/false));
 }
 

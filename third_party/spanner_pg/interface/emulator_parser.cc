@@ -32,7 +32,7 @@
 #include "third_party/spanner_pg/interface/emulator_parser.h"
 #include <memory>
 
-#include "zetasql/public/function_signature.h"
+#include "googlesql/public/function_signature.h"
 #include "absl/strings/substitute.h"
 #include "third_party/spanner_pg/interface/emulator_builtin_function_catalog.h"
 #include "third_party/spanner_pg/interface/parser_output.h"
@@ -40,7 +40,7 @@
 #include "third_party/spanner_pg/interface/spangres_translator_factory.h"
 #include "third_party/spanner_pg/interface/spangres_translator_interface.h"
 #include "third_party/spanner_pg/shims/error_shim.h"
-#include "zetasql/base/status_macros.h"
+#include "googlesql/base/status_macros.h"
 
 namespace postgres_translator {
 namespace spangres {
@@ -50,23 +50,23 @@ using ::postgres_translator::interfaces::ParserOutput;
 using ::postgres_translator::interfaces::SpangresTranslatorFactory;
 using ::postgres_translator::interfaces::TranslateParsedQueryParamsBuilder;
 
-absl::StatusOr<std::unique_ptr<const zetasql::AnalyzerOutput>>
+absl::StatusOr<std::unique_ptr<const googlesql::AnalyzerOutput>>
 ParseAndAnalyzePostgreSQL(
-    const std::string& sql, zetasql::EnumerableCatalog* catalog,
-    const zetasql::AnalyzerOptions& analyzer_options,
-    zetasql::TypeFactory* type_factory,
+    const std::string& sql, googlesql::EnumerableCatalog* catalog,
+    const googlesql::AnalyzerOptions& analyzer_options,
+    googlesql::TypeFactory* type_factory,
     std::unique_ptr<FunctionCatalog> emulator_function_catalog) {
   using postgres_translator::interfaces::ParserOutput;
   using postgres_translator::interfaces::SpangresTranslatorFactory;
   using postgres_translator::interfaces::TranslateParsedQueryParamsBuilder;
 
-  ZETASQL_ASSIGN_OR_RETURN(ParserOutput parser_output,
+  GOOGLESQL_ASSIGN_OR_RETURN(ParserOutput parser_output,
                    CheckedPgRawParserFullOutput(sql.c_str()));
 
   return SpangresTranslatorFactory::Create()->TranslateParsedQuery(
       TranslateParsedQueryParamsBuilder(
           std::move(parser_output), sql, catalog,
-          absl::make_unique<EmulatorBuiltinFunctionCatalog>(
+          std::make_unique<EmulatorBuiltinFunctionCatalog>(
               std::move(emulator_function_catalog)))
           .SetAnalyzerOptions(analyzer_options)
           .SetTypeFactory(type_factory)
@@ -76,36 +76,38 @@ ParseAndAnalyzePostgreSQL(
 absl::StatusOr<interfaces::ExpressionTranslateResult>
 TranslateTableLevelExpression(
     absl::string_view expression, absl::string_view table_name,
-    zetasql::EnumerableCatalog& catalog,
-    const zetasql::AnalyzerOptions& analyzer_options,
-    zetasql::TypeFactory* type_factory,
-    std::unique_ptr<FunctionCatalog> emulator_function_catalog) {
+    googlesql::EnumerableCatalog& catalog,
+    const googlesql::AnalyzerOptions& analyzer_options,
+    googlesql::TypeFactory* type_factory,
+    std::unique_ptr<FunctionCatalog> emulator_function_catalog,
+    bool table_in_named_catalog) {
   // Wrap the expression in SELECT <expression> FROM <table_name>.
-  ZETASQL_ASSIGN_OR_RETURN(
-      std::string wrapped_expression,
-      SpangresTranslator::WrapExpressionInSelect(expression, table_name));
+  GOOGLESQL_ASSIGN_OR_RETURN(std::string wrapped_expression,
+                   SpangresTranslator::WrapExpressionInSelect(
+                       expression, table_name, table_in_named_catalog));
 
-  ZETASQL_ASSIGN_OR_RETURN(ParserOutput parser_output,
+  GOOGLESQL_ASSIGN_OR_RETURN(ParserOutput parser_output,
                    CheckedPgRawParserFullOutput(wrapped_expression.c_str()));
 
   return SpangresTranslatorFactory::Create()
       ->TranslateParsedTableLevelExpression(
           TranslateParsedQueryParamsBuilder(
               std::move(parser_output), {}, &catalog,
-              absl::make_unique<EmulatorBuiltinFunctionCatalog>(
+              std::make_unique<EmulatorBuiltinFunctionCatalog>(
                   std::move(emulator_function_catalog)))
               .SetAnalyzerOptions(analyzer_options)
               .SetTypeFactory(type_factory)
+              .SetTableInNamedCatalog(table_in_named_catalog)
               .Build(),
           table_name);
 }
 
 absl::StatusOr<interfaces::ExpressionTranslateResult> TranslateQueryInView(
-    absl::string_view query, zetasql::EnumerableCatalog& catalog,
-    const zetasql::AnalyzerOptions& analyzer_options,
-    zetasql::TypeFactory* type_factory,
+    absl::string_view query, googlesql::EnumerableCatalog& catalog,
+    const googlesql::AnalyzerOptions& analyzer_options,
+    googlesql::TypeFactory* type_factory,
     std::unique_ptr<FunctionCatalog> emulator_function_catalog) {
-  ZETASQL_ASSIGN_OR_RETURN(
+  GOOGLESQL_ASSIGN_OR_RETURN(
       ParserOutput parser_output,
       CheckedPgRawParserFullOutput(std::string(query).c_str()));
 
@@ -120,11 +122,11 @@ absl::StatusOr<interfaces::ExpressionTranslateResult> TranslateQueryInView(
 }
 
 absl::StatusOr<interfaces::ExpressionTranslateResult> TranslateFunctionBody(
-    absl::string_view query, zetasql::EnumerableCatalog& catalog,
-    const zetasql::AnalyzerOptions& analyzer_options,
-    zetasql::TypeFactory* type_factory,
+    absl::string_view query, googlesql::EnumerableCatalog& catalog,
+    const googlesql::AnalyzerOptions& analyzer_options,
+    googlesql::TypeFactory* type_factory,
     std::unique_ptr<FunctionCatalog> emulator_function_catalog) {
-  ZETASQL_ASSIGN_OR_RETURN(ParserOutput parser_output,
+  GOOGLESQL_ASSIGN_OR_RETURN(ParserOutput parser_output,
                    CheckedPgRawParserFullOutput(std::string(query).c_str()));
 
   return SpangresTranslatorFactory::Create()->TranslateParsedFunctionBody(

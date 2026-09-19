@@ -2,7 +2,7 @@
  *
  * bbstreamer_zstd.c
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  src/bin/pg_basebackup/bbstreamer_zstd.c
@@ -106,6 +106,16 @@ bbstreamer_zstd_compressor_new(bbstreamer *next, pg_compress_specification *comp
 					 compress->workers, ZSTD_getErrorName(ret));
 	}
 
+	if ((compress->options & PG_COMPRESSION_OPTION_LONG_DISTANCE) != 0)
+	{
+		ret = ZSTD_CCtx_setParameter(streamer->cctx,
+									 ZSTD_c_enableLongDistanceMatching,
+									 compress->long_distance);
+		if (ZSTD_isError(ret))
+			pg_fatal("could not enable long-distance mode: %s",
+					 ZSTD_getErrorName(ret));
+	}
+
 	/* Initialize the ZSTD output buffer. */
 	streamer->zstd_outBuf.dst = streamer->base.bbs_buffer.data;
 	streamer->zstd_outBuf.size = streamer->base.bbs_buffer.maxlen;
@@ -113,7 +123,7 @@ bbstreamer_zstd_compressor_new(bbstreamer *next, pg_compress_specification *comp
 
 	return &streamer->base;
 #else
-	pg_fatal("this build does not support zstd compression");
+	pg_fatal("this build does not support compression with %s", "ZSTD");
 	return NULL;				/* keep compiler quiet */
 #endif
 }
@@ -165,8 +175,8 @@ bbstreamer_zstd_compressor_content(bbstreamer *streamer,
 								 &inBuf, ZSTD_e_continue);
 
 		if (ZSTD_isError(yet_to_flush))
-			pg_log_error("could not compress data: %s",
-						 ZSTD_getErrorName(yet_to_flush));
+			pg_fatal("could not compress data: %s",
+					 ZSTD_getErrorName(yet_to_flush));
 	}
 }
 
@@ -207,8 +217,8 @@ bbstreamer_zstd_compressor_finalize(bbstreamer *streamer)
 											&in, ZSTD_e_end);
 
 		if (ZSTD_isError(yet_to_flush))
-			pg_log_error("could not compress data: %s",
-						 ZSTD_getErrorName(yet_to_flush));
+			pg_fatal("could not compress data: %s",
+					 ZSTD_getErrorName(yet_to_flush));
 
 	} while (yet_to_flush > 0);
 
@@ -268,7 +278,7 @@ bbstreamer_zstd_decompressor_new(bbstreamer *next)
 
 	return &streamer->base;
 #else
-	pg_fatal("this build does not support zstd compression");
+	pg_fatal("this build does not support compression with %s", "ZSTD");
 	return NULL;				/* keep compiler quiet */
 #endif
 }
@@ -313,8 +323,8 @@ bbstreamer_zstd_decompressor_content(bbstreamer *streamer,
 									&mystreamer->zstd_outBuf, &inBuf);
 
 		if (ZSTD_isError(ret))
-			pg_log_error("could not decompress data: %s",
-						 ZSTD_getErrorName(ret));
+			pg_fatal("could not decompress data: %s",
+					 ZSTD_getErrorName(ret));
 	}
 }
 
@@ -333,7 +343,7 @@ bbstreamer_zstd_decompressor_finalize(bbstreamer *streamer)
 	if (mystreamer->zstd_outBuf.pos > 0)
 		bbstreamer_content(mystreamer->base.bbs_next, NULL,
 						   mystreamer->base.bbs_buffer.data,
-						   mystreamer->base.bbs_buffer.maxlen,
+						   mystreamer->zstd_outBuf.pos,
 						   BBSTREAMER_UNKNOWN);
 
 	bbstreamer_finalize(mystreamer->base.bbs_next);

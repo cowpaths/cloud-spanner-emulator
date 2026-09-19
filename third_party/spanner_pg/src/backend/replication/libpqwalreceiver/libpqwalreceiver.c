@@ -6,7 +6,7 @@
  * loaded as a dynamic module to avoid linking the main server binary with
  * libpq.
  *
- * Portions Copyright (c) 2010-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2023, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -36,8 +36,6 @@
 
 PG_MODULE_MAGIC;
 
-void		_PG_init(void);
-
 struct WalReceiverConn
 {
 	/* Current connection to the primary, if any */
@@ -50,14 +48,17 @@ struct WalReceiverConn
 
 /* Prototypes for interface functions */
 static WalReceiverConn *libpqrcv_connect(const char *conninfo,
-										 bool logical, const char *appname,
-										 char **err);
-static void libpqrcv_check_conninfo(const char *conninfo);
+										 bool logical, bool must_use_password,
+										 const char *appname, char **err);
+static void libpqrcv_check_conninfo(const char *conninfo,
+									bool must_use_password);
 static char *libpqrcv_get_conninfo(WalReceiverConn *conn);
 static void libpqrcv_get_senderinfo(WalReceiverConn *conn,
 									char **sender_host, int *sender_port);
 static char *libpqrcv_identify_system(WalReceiverConn *conn,
 									  TimeLineID *primary_tli);
+static char *libpqrcv_get_option_from_conninfo(const char *connInfo,
+											   const char *keyword);
 static int	libpqrcv_server_version(WalReceiverConn *conn);
 static void libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
 											 TimeLineID tli, char **filename,
@@ -84,21 +85,21 @@ static WalRcvExecResult *libpqrcv_exec(WalReceiverConn *conn,
 static void libpqrcv_disconnect(WalReceiverConn *conn);
 
 static WalReceiverFunctionsType PQWalReceiverFunctions = {
-	libpqrcv_connect,
-	libpqrcv_check_conninfo,
-	libpqrcv_get_conninfo,
-	libpqrcv_get_senderinfo,
-	libpqrcv_identify_system,
-	libpqrcv_server_version,
-	libpqrcv_readtimelinehistoryfile,
-	libpqrcv_startstreaming,
-	libpqrcv_endstreaming,
-	libpqrcv_receive,
-	libpqrcv_send,
-	libpqrcv_create_slot,
-	libpqrcv_get_backend_pid,
-	libpqrcv_exec,
-	libpqrcv_disconnect
+	.walrcv_connect = libpqrcv_connect,
+	.walrcv_check_conninfo = libpqrcv_check_conninfo,
+	.walrcv_get_conninfo = libpqrcv_get_conninfo,
+	.walrcv_get_senderinfo = libpqrcv_get_senderinfo,
+	.walrcv_identify_system = libpqrcv_identify_system,
+	.walrcv_server_version = libpqrcv_server_version,
+	.walrcv_readtimelinehistoryfile = libpqrcv_readtimelinehistoryfile,
+	.walrcv_startstreaming = libpqrcv_startstreaming,
+	.walrcv_endstreaming = libpqrcv_endstreaming,
+	.walrcv_receive = libpqrcv_receive,
+	.walrcv_send = libpqrcv_send,
+	.walrcv_create_slot = libpqrcv_create_slot,
+	.walrcv_get_backend_pid = libpqrcv_get_backend_pid,
+	.walrcv_exec = libpqrcv_exec,
+	.walrcv_disconnect = libpqrcv_disconnect
 };
 
 /* Prototypes for private functions */
@@ -120,17 +121,33 @@ _PG_init(void)
 /*
  * Establish the connection to the primary server for XLOG streaming
  *
- * Returns NULL on error and fills the err with palloc'ed error message.
+ * If an error occurs, this function will normally return NULL and set *err
+ * to a palloc'ed error message. However, if must_use_password is true and
+ * the connection fails to use the password, this function will ereport(ERROR).
+ * We do this because in that case the error includes a detail and a hint for
+ * consistency with other parts of the system, and it's not worth adding the
+ * machinery to pass all of those back to the caller just to cover this one
+ * case.
  */
 static WalReceiverConn *
-libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
-				 char **err)
+libpqrcv_connect(const char *conninfo, bool logical, bool must_use_password,
+				 const char *appname, char **err)
 {
 	WalReceiverConn *conn;
 	PostgresPollingStatusType status;
 	const char *keys[6];
 	const char *vals[6];
 	int			i = 0;
+	char	   *options_val = NULL;
+
+	/*
+	 * Re-validate connection string. The validation already happened at DDL
+	 * time, but the subscription owner may have changed. If we don't recheck
+	 * with the correct must_use_password, it's possible that the connection
+	 * will obtain the password from a different source, such as PGPASSFILE or
+	 * PGPASSWORD.
+	 */
+	libpqrcv_check_conninfo(conninfo, must_use_password);
 
 	/*
 	 * We use the expand_dbname parameter to process the connection string (or
@@ -153,6 +170,8 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 	vals[i] = appname;
 	if (logical)
 	{
+		char	   *opt = NULL;
+
 		/* Tell the publisher to translate to our encoding */
 		keys[++i] = "client_encoding";
 		vals[i] = GetDatabaseEncodingName();
@@ -165,8 +184,13 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 		 * the subscriber, such as triggers.)  This should match what pg_dump
 		 * does.
 		 */
+		opt = libpqrcv_get_option_from_conninfo(conninfo, "options");
+		options_val = psprintf("%s -c datestyle=ISO -c intervalstyle=postgres -c extra_float_digits=3",
+							   (opt == NULL) ? "" : opt);
 		keys[++i] = "options";
-		vals[i] = "-c datestyle=ISO -c intervalstyle=postgres -c extra_float_digits=3";
+		vals[i] = options_val;
+		if (opt != NULL)
+			pfree(opt);
 	}
 	keys[++i] = NULL;
 	vals[i] = NULL;
@@ -218,8 +242,23 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 			status = PQconnectPoll(conn->streamConn);
 	} while (status != PGRES_POLLING_OK && status != PGRES_POLLING_FAILED);
 
+	if (options_val != NULL)
+		pfree(options_val);
+
 	if (PQstatus(conn->streamConn) != CONNECTION_OK)
 		goto bad_connection_errmsg;
+
+	if (must_use_password && !PQconnectionUsedPassword(conn->streamConn))
+	{
+		PQfinish(conn->streamConn);
+		pfree(conn);
+
+		ereport(ERROR,
+				(errcode(ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED),
+				 errmsg("password is required"),
+				 errdetail("Non-superuser cannot connect if the server does not request a password."),
+				 errhint("Target server's authentication method must be changed, or set password_required=false in the subscription parameters.")));
+	}
 
 	if (logical)
 	{
@@ -253,12 +292,18 @@ bad_connection:
 }
 
 /*
- * Validate connection info string (just try to parse it)
+ * Validate connection info string, and determine whether it might cause
+ * local filesystem access to be attempted.
+ *
+ * If the connection string can't be parsed, this function will raise
+ * an error and will not return. If it can, it will return true if this
+ * connection string specifies a password and false otherwise.
  */
 static void
-libpqrcv_check_conninfo(const char *conninfo)
+libpqrcv_check_conninfo(const char *conninfo, bool must_use_password)
 {
 	PQconninfoOption *opts = NULL;
+	PQconninfoOption *opt;
 	char	   *err = NULL;
 
 	opts = PQconninfoParse(conninfo, &err);
@@ -271,6 +316,35 @@ libpqrcv_check_conninfo(const char *conninfo)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("invalid connection string syntax: %s", errcopy)));
+	}
+
+	if (must_use_password)
+	{
+		bool		uses_password = false;
+
+		for (opt = opts; opt->keyword != NULL; ++opt)
+		{
+			/* Ignore connection options that are not present. */
+			if (opt->val == NULL)
+				continue;
+
+			if (strcmp(opt->keyword, "password") == 0 && opt->val[0] != '\0')
+			{
+				uses_password = true;
+				break;
+			}
+		}
+
+		if (!uses_password)
+		{
+			/* malloc'd, so we must free it explicitly */
+			PQconninfoFree(opts);
+
+			ereport(ERROR,
+					(errcode(ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED),
+					 errmsg("password is required"),
+					 errdetail("Non-superusers must provide a password in the connection string.")));
+		}
 	}
 
 	PQconninfoFree(opts);
@@ -373,6 +447,7 @@ libpqrcv_identify_system(WalReceiverConn *conn, TimeLineID *primary_tli)
 						"the primary server: %s",
 						pchomp(PQerrorMessage(conn->streamConn)))));
 	}
+
 	/*
 	 * IDENTIFY_SYSTEM returns 3 columns in 9.3 and earlier, and 4 columns in
 	 * 9.4 and onwards.
@@ -403,6 +478,51 @@ static int
 libpqrcv_server_version(WalReceiverConn *conn)
 {
 	return PQserverVersion(conn->streamConn);
+}
+
+/*
+ * Get the value of the option with the given keyword from the primary
+ * server's conninfo.
+ *
+ * If the option is not found in connInfo, return NULL value.
+ */
+static char *
+libpqrcv_get_option_from_conninfo(const char *connInfo, const char *keyword)
+{
+	PQconninfoOption *opts;
+	char	   *option = NULL;
+	char	   *err = NULL;
+
+	opts = PQconninfoParse(connInfo, &err);
+	if (opts == NULL)
+	{
+		/* The error string is malloc'd, so we must free it explicitly */
+		char	   *errcopy = err ? pstrdup(err) : "out of memory";
+
+		PQfreemem(err);
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("invalid connection string syntax: %s", errcopy)));
+	}
+
+	for (PQconninfoOption *opt = opts; opt->keyword != NULL; ++opt)
+	{
+		/*
+		 * If the same option appears multiple times, then the last one will
+		 * be returned
+		 */
+		if (strcmp(opt->keyword, keyword) == 0 && opt->val &&
+			*opt->val)
+		{
+			if (option)
+				pfree(option);
+
+			option = pstrdup(opt->val);
+		}
+	}
+
+	PQconninfoFree(opts);
+	return option;
 }
 
 /*
@@ -453,13 +573,18 @@ libpqrcv_startstreaming(WalReceiverConn *conn,
 		appendStringInfo(&cmd, "proto_version '%u'",
 						 options->proto.logical.proto_version);
 
-		if (options->proto.logical.streaming &&
-			PQserverVersion(conn->streamConn) >= 140000)
-			appendStringInfoString(&cmd, ", streaming 'on'");
+		if (options->proto.logical.streaming_str)
+			appendStringInfo(&cmd, ", streaming '%s'",
+							 options->proto.logical.streaming_str);
 
 		if (options->proto.logical.twophase &&
 			PQserverVersion(conn->streamConn) >= 150000)
 			appendStringInfoString(&cmd, ", two_phase 'on'");
+
+		if (options->proto.logical.origin &&
+			PQserverVersion(conn->streamConn) >= 160000)
+			appendStringInfo(&cmd, ", origin '%s'",
+							 options->proto.logical.origin);
 
 		pubnames = options->proto.logical.publication_names;
 		pubnames_str = stringlist_to_identifierstr(conn->streamConn, pubnames);
@@ -639,12 +764,9 @@ libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
  * Send a query and wait for the results by using the asynchronous libpq
  * functions and socket readiness events.
  *
- * We must not use the regular blocking libpq functions like PQexec()
- * since they are uninterruptible by signals on some platforms, such as
- * Windows.
- *
- * The function is modeled on PQexec() in libpq, but only implements
- * those parts that are in use in the walreceiver api.
+ * The function is modeled on libpqsrv_exec(), with the behavior difference
+ * being that it calls ProcessWalRcvInterrupts().  As an optimization, it
+ * skips try/catch, since all errors terminate the process.
  *
  * May return NULL, rather than an error result, on failure.
  */
@@ -746,8 +868,7 @@ static void
 libpqrcv_disconnect(WalReceiverConn *conn)
 {
 	PQfinish(conn->streamConn);
-	if (conn->recvBuf != NULL)
-		PQfreemem(conn->recvBuf);
+	PQfreemem(conn->recvBuf);
 	pfree(conn);
 }
 
@@ -773,8 +894,7 @@ libpqrcv_receive(WalReceiverConn *conn, char **buffer,
 {
 	int			rawlen;
 
-	if (conn->recvBuf != NULL)
-		PQfreemem(conn->recvBuf);
+	PQfreemem(conn->recvBuf);
 	conn->recvBuf = NULL;
 
 	/* Try to receive a CopyData message */

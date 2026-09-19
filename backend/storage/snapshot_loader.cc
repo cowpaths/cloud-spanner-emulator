@@ -44,9 +44,9 @@
 #include "frontend/collections/instance_manager.h"
 #include "frontend/entities/database.h"
 #include "frontend/server/environment.h"
-#include "zetasql/public/type.h"
-#include "zetasql/public/value.h"
-#include "zetasql/base/status_macros.h"
+#include "googlesql/public/type.h"
+#include "googlesql/public/value.h"
+#include "googlesql/base/status_macros.h"
 
 namespace google {
 namespace spanner {
@@ -71,12 +71,12 @@ absl::Status PopulateStorage(
   }
 
   // Use the database's TypeFactory for value deserialization.
-  zetasql::TypeFactory* type_factory = database->type_factory();
+  googlesql::TypeFactory* type_factory = database->type_factory();
 
   // Create a read-write transaction to write data.
   ReadWriteOptions rw_options;
   RetryState retry_state;
-  ZETASQL_ASSIGN_OR_RETURN(auto txn,
+  GOOGLESQL_ASSIGN_OR_RETURN(auto txn,
                    database->CreateReadWriteTransaction(rw_options,
                                                         retry_state));
 
@@ -107,7 +107,7 @@ absl::Status PopulateStorage(
     for (const auto& row_proto : table_proto.rows()) {
       // For each row, collect column names and values from the persisted cells.
       std::vector<std::string> col_names;
-      std::vector<zetasql::Value> col_values;
+      std::vector<googlesql::Value> col_values;
 
       for (const auto& cell_proto : row_proto.cells()) {
         auto it = column_map.find(cell_proto.column_id());
@@ -134,7 +134,7 @@ absl::Status PopulateStorage(
         const auto& latest_version =
             cell_proto.versions(cell_proto.versions_size() - 1);
 
-        ZETASQL_ASSIGN_OR_RETURN(
+        GOOGLESQL_ASSIGN_OR_RETURN(
             auto value,
             DeserializeValue(latest_version.value(), type_factory));
 
@@ -155,8 +155,8 @@ absl::Status PopulateStorage(
   }
 
   // Write the mutation and commit the transaction.
-  ZETASQL_RETURN_IF_ERROR(txn->Write(mutation));
-  ZETASQL_RETURN_IF_ERROR(txn->Commit());
+  GOOGLESQL_RETURN_IF_ERROR(txn->Write(mutation));
+  GOOGLESQL_RETURN_IF_ERROR(txn->Commit());
 
   return absl::OkStatus();
 }
@@ -227,7 +227,7 @@ absl::StatusOr<absl::Time> SnapshotLoader::LoadSnapshot(
         static_cast<google::spanner::admin::database::v1::DatabaseDialect>(
             pd.dialect());
 
-    ZETASQL_ASSIGN_OR_RETURN(
+    GOOGLESQL_ASSIGN_OR_RETURN(
         auto database,
         env->database_manager()->CreateDatabase(pd.database_uri(), schema_op));
 
@@ -238,7 +238,7 @@ absl::StatusOr<absl::Time> SnapshotLoader::LoadSnapshot(
       absl::Time data_timestamp =
           snapshot_time - absl::Microseconds(1);
 
-      ZETASQL_RETURN_IF_ERROR(
+      GOOGLESQL_RETURN_IF_ERROR(
           PopulateStorage(database->backend(), pd.storage(), data_timestamp));
     }
 

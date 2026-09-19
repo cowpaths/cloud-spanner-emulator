@@ -25,7 +25,7 @@
 #include <variant>
 
 #include "google/spanner/v1/spanner.pb.h"
-#include "zetasql/public/value.h"
+#include "googlesql/public/value.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
@@ -49,10 +49,10 @@
 #include "frontend/converters/types.h"
 #include "frontend/converters/values.h"
 #include "frontend/entities/database.h"
-#include "zetasql/base/ret_check.h"
+#include "googlesql/base/status_macros.h"
+#include "googlesql/base/ret_check.h"
 #include "absl/status/status.h"
-#include "zetasql/base/status_macros.h"
-#include "zetasql/base/time_proto_util.h"
+#include "googlesql/base/time_proto_util.h"
 
 namespace google {
 namespace spanner {
@@ -105,7 +105,7 @@ Transaction::Transaction(
 {}
 
 void Transaction::Close() {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   closed_ = true;
   if (type_ == kReadWrite || type_ == kPartitionedDml) {
     read_write()->Rollback().IgnoreError();
@@ -119,15 +119,15 @@ absl::StatusOr<spanner_api::Transaction> Transaction::ToProto() {
   }
   if (options_.has_read_only() &&
       options_.read_only().return_read_timestamp()) {
-    ZETASQL_ASSIGN_OR_RETURN(absl::Time read_timestamp, GetReadTimestamp());
-    ZETASQL_ASSIGN_OR_RETURN(*txn.mutable_read_timestamp(),
+    GOOGLESQL_ASSIGN_OR_RETURN(absl::Time read_timestamp, GetReadTimestamp());
+    GOOGLESQL_ASSIGN_OR_RETURN(*txn.mutable_read_timestamp(),
                      TimestampToProto(read_timestamp));
   }
   return txn;
 }
 
 bool Transaction::IsClosed() const {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   return closed_;
 }
 
@@ -155,7 +155,7 @@ bool Transaction::IsInvalid() const {
 }
 
 bool Transaction::IsAborted() const {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   return type_ == kReadWrite && status_.code() == absl::StatusCode::kAborted;
 }
 
@@ -243,11 +243,11 @@ absl::StatusOr<backend::QueryResult> Transaction::ExecuteSql(
           .commit_timestamp_tracker = read_write()->commit_timestamp_tracker(),
           .allow_read_write_only_functions = true,
           .is_read_only_txn = false};
-      ZETASQL_RETURN_IF_ERROR(query_engine_->IsValidPartitionedDML(query, context));
+      GOOGLESQL_RETURN_IF_ERROR(query_engine_->IsValidPartitionedDML(query, context));
       // PartitionedDml will auto-commit transactions and cannot be reused.
-      ZETASQL_ASSIGN_OR_RETURN(backend::QueryResult result,
+      GOOGLESQL_ASSIGN_OR_RETURN(backend::QueryResult result,
                        query_engine_->ExecuteSql(query, context, query_mode));
-      ZETASQL_RETURN_IF_ERROR(read_write()->Commit());
+      GOOGLESQL_RETURN_IF_ERROR(read_write()->Commit());
       return result;
     }
   }
@@ -394,7 +394,7 @@ Transaction::DMLErrorHandlingMode Transaction::DMLErrorType() const {
 
 absl::Status Transaction::GuardedCall(OpType op,
                                       const std::function<absl::Status()>& fn) {
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
 
   // Cannot reuse a transaction that previously encountered an error.
   // Replay the last error status for the given transaction. Status will not be
@@ -402,7 +402,7 @@ absl::Status Transaction::GuardedCall(OpType op,
   // this inside of the handler since dml sequence number replay must be checked
   // first.
   if (op != OpType::kDml && op != OpType::kRollback) {
-    ZETASQL_RETURN_IF_ERROR(status_);
+    GOOGLESQL_RETURN_IF_ERROR(status_);
   }
 
   // We only want to record the status for non-read operations, since read-only

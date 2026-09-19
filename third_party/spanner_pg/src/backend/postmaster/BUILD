@@ -46,7 +46,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_library(
     name = "postmaster",
@@ -60,7 +60,6 @@ cc_library(
         "interrupt.c",
         "pgarch.c",
         "postmaster.c",
-        "shell_archive.c",
         "startup.c",
         "syslogger.c",
         "walwriter.c",

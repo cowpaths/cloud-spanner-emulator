@@ -34,8 +34,10 @@ namespace frontend {
 absl::StatusOr<backend::Query> QueryFromProto(
     std::string sql, const google::protobuf::Struct& params,
     google::protobuf::Map<std::string, google::spanner::v1::Type> param_types,
-    zetasql::TypeFactory* type_factory,
-    std::shared_ptr<const backend::ProtoBundle> proto_bundle);
+    googlesql::TypeFactory* type_factory,
+    std::shared_ptr<const backend::ProtoBundle> proto_bundle,
+    const google::protobuf::Map<std::string, google::protobuf::Value>& secure_context =
+        {});
 
 }  // namespace frontend
 }  // namespace emulator

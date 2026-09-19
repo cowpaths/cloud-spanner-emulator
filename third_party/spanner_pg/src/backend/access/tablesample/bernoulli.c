@@ -13,7 +13,7 @@
  * cutoff value computed from the selection probability by BeginSampleScan.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -66,7 +66,9 @@ tsm_bernoulli_handler(PG_FUNCTION_ARGS)
 {
 	TsmRoutine *tsm = makeNode(TsmRoutine);
 
-	tsm->parameterTypes = list_make1_oid(FLOAT4OID);
+	// SPANGRES START
+	tsm->parameterTypes = list_make1_oid(FLOAT8OID);
+	// SPANGRES END
 	tsm->repeatable_across_queries = true;
 	tsm->repeatable_across_scans = true;
 	tsm->SampleScanGetSampleSize = bernoulli_samplescangetsamplesize;

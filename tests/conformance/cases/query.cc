@@ -16,13 +16,14 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
@@ -50,7 +51,13 @@ using cloud::spanner::JsonB;
 using cloud::spanner::MakePgNumeric;
 using cloud::spanner::PgNumeric;
 using postgres_translator::spangres::datatypes::common::MaxNumericString;
-using zetasql_base::testing::StatusIs;
+using googlesql_base::testing::StatusIs;
+
+struct DistinctTestCase {
+  std::string expr1;
+  std::string expr2;
+  bool is_distinct;
+};
 
 class QueryTest
     : public DatabaseTest,
@@ -76,7 +83,7 @@ class QueryTest
  protected:
   void PopulateScalarTypesTable() {
     if (GetParam() == database_api::DatabaseDialect::POSTGRESQL) {
-      ZETASQL_EXPECT_OK(MultiInsert(
+      GOOGLESQL_EXPECT_OK(MultiInsert(
           "scalar_types_table",
           {"int_val", "bool_val", "bytes_val", "date_val", "float_val",
            "string_val", "numeric_val", "timestamp_val", "json_val"},
@@ -86,7 +93,7 @@ class QueryTest
            {1, true, Bytes("bytes"), Date(2020, 12, 1), 345.123, "stringValue",
             *MakePgNumeric("1.23"), Timestamp(), JsonB(R"({"key": 123})")}}));
     } else {
-      ZETASQL_EXPECT_OK(MultiInsert(
+      GOOGLESQL_EXPECT_OK(MultiInsert(
           "scalar_types_table",
           {"int_val", "bool_val", "bytes_val", "date_val", "float_val",
            "string_val", "numeric_val", "timestamp_val", "json_val"},
@@ -100,12 +107,12 @@ class QueryTest
   }
 
   void PopulateDatabase() {
-    ZETASQL_EXPECT_OK(MultiInsert("users", {"user_id", "name", "age"},
+    GOOGLESQL_EXPECT_OK(MultiInsert("users", {"user_id", "name", "age"},
                           {{1, "Douglas Adams", 49},
                            {2, "Suzanne Collins", 61},
                            {3, "J.R.R. Tolkien", 81}}));
 
-    ZETASQL_EXPECT_OK(MultiInsert("threads", {"user_id", "thread_id", "starred"},
+    GOOGLESQL_EXPECT_OK(MultiInsert("threads", {"user_id", "thread_id", "starred"},
                           {{1, 1, true},
                            {1, 2, true},
                            {1, 3, true},
@@ -114,7 +121,7 @@ class QueryTest
                            {2, 2, true},
                            {3, 1, false}}));
 
-    ZETASQL_EXPECT_OK(MultiInsert("messages",
+    GOOGLESQL_EXPECT_OK(MultiInsert("messages",
                           {"user_id", "thread_id", "message_id", "subject"},
                           {{1, 1, 1, "a code review"},
                            {1, 1, 2, "Re: a code review"},
@@ -128,22 +135,51 @@ class QueryTest
     PopulateScalarTypesTable();
 
     if (GetParam() == database_api::DatabaseDialect::POSTGRESQL) {
-      ZETASQL_EXPECT_OK(MultiInsert("numeric_table", {"key", "val"},
+      GOOGLESQL_EXPECT_OK(MultiInsert("numeric_table", {"key", "val"},
                             {{-2, Null<PgNumeric>()},
                              {-1, *MakePgNumeric("-12.3")},
                              {0, *MakePgNumeric("0")},
                              {1, *MakePgNumeric("12.3")}}));
     } else {
-      ZETASQL_EXPECT_OK(
+      GOOGLESQL_EXPECT_OK(
           MultiInsert("numeric_table", {"key", "val"},
                       {{Null<Numeric>(), Null<std::int64_t>()},
                        {cloud::spanner::MakeNumeric("-12.3").value(), -1},
                        {cloud::spanner::MakeNumeric("0").value(), 0},
                        {cloud::spanner::MakeNumeric("12.3").value(), 1}}));
-      ZETASQL_ASSERT_OK(MultiInsert("array_table", {"key", "string_array"},
+      GOOGLESQL_ASSERT_OK(MultiInsert("array_table", {"key", "string_array"},
                             {{1, Array<std::string>{"test1"}},
                              {2, Array<std::string>{"not_applicable"}},
                              {3, Array<std::string>{"test2"}}}));
+    }
+  }
+
+  void RunDistinctTests(const std::vector<DistinctTestCase>& test_cases) {
+    for (const auto& tc : test_cases) {
+      const std::string_view expr1 = tc.expr1;
+      const std::string_view expr2 = tc.expr2;
+      const bool is_distinct = tc.is_distinct;
+
+      // Test expr1 IS DISTINCT FROM expr2 and commutativity expr2 IS DISTINCT
+      // FROM expr1.
+      EXPECT_THAT(
+          Query(absl::StrFormat("SELECT %s IS DISTINCT FROM %s", expr1, expr2)),
+          IsOkAndHoldsRow(is_distinct))
+          << "Failed for: " << expr1 << " IS DISTINCT FROM " << expr2;
+      EXPECT_THAT(
+          Query(absl::StrFormat("SELECT %s IS DISTINCT FROM %s", expr2, expr1)),
+          IsOkAndHoldsRow(is_distinct))
+          << "Failed for: " << expr2 << " IS DISTINCT FROM " << expr1;
+
+      // Test IS NOT DISTINCT FROM (inverted logic).
+      EXPECT_THAT(Query(absl::StrFormat("SELECT %s IS NOT DISTINCT FROM %s",
+                                        expr1, expr2)),
+                  IsOkAndHoldsRow(!is_distinct))
+          << "Failed for: " << expr1 << " IS NOT DISTINCT FROM " << expr2;
+      EXPECT_THAT(Query(absl::StrFormat("SELECT %s IS NOT DISTINCT FROM %s",
+                                        expr2, expr1)),
+                  IsOkAndHoldsRow(!is_distinct))
+          << "Failed for: " << expr2 << " IS NOT DISTINCT FROM " << expr1;
     }
   }
 
@@ -394,6 +430,13 @@ TEST_P(QueryTest, JSONFunctions) {
     )"),
                 StatusIs(absl::StatusCode::kOutOfRange));
 
+    PopulateDatabase();
+
+    EXPECT_THAT(Query(R"(
+      GRAPH test_graph MATCH (n) WHERE n.user_id = 1 RETURN JSON_VALUE(SAFE_TO_JSON(n), '$.properties.name') AS name
+    )"),
+                IsOkAndHoldsRow({"Douglas Adams"}));
+
     EXPECT_THAT(Query(R"(SELECT TO_JSON_STRING(JSON '{"a":"str", "b":2}'))"),
                 IsOkAndHoldsRow({R"({"a":"str","b":2})"}));
     EXPECT_THAT(
@@ -530,7 +573,7 @@ TEST_P(QueryTest, NETFunctions) {
                               NET.HOST("A"),
                               NET.PUBLIC_SUFFIX("B"),
                               NET.REG_DOMAIN("C"))"),
-              zetasql_base::testing::IsOk());
+              googlesql_base::testing::IsOk());
 }
 
 TEST_P(QueryTest, CanReturnArrayOfStructTypedColumns) {
@@ -864,6 +907,120 @@ TEST_P(QueryTest, UnnestWithOrdinalityOrOffset) {
   }
 }
 
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  GOOGLESQL_EXPECT_OK(MultiInsert("EntityWithArrays", {"id", "the_array"},
+                        {{2, Array<std::string>{"abc", "def", "ghi"}}}));
+
+  EXPECT_THAT(
+      Query("SELECT ewa1_0.id, a1_0.ordinality, a1_0.a1_0 "
+            "FROM EntityWithArrays ewa1_0 "
+            "JOIN UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 ON true "
+            "ORDER BY ewa1_0.id, a1_0.ordinality"),
+      IsOkAndHoldsRows({{2, 1, "abc"}, {2, 2, "def"}, {2, 3, "ghi"}}));
+}
+
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_Filter) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  GOOGLESQL_EXPECT_OK(MultiInsert("EntityWithArrays", {"id", "the_array"},
+                        {{2, Array<std::string>{"abc", "def", "ghi"}}}));
+
+  EXPECT_THAT(
+      Query("SELECT ewa1_0.id, a1_0.ordinality, a1_0.a1_0 "
+            "FROM EntityWithArrays ewa1_0 "
+            "JOIN UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 ON true "
+            "WHERE a1_0.ordinality > 1 "
+            "ORDER BY ewa1_0.id, a1_0.ordinality"),
+      IsOkAndHoldsRows({{2, 2, "def"}, {2, 3, "ghi"}}));
+}
+
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_EmptyAndNull) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  GOOGLESQL_EXPECT_OK(MultiInsert("EntityWithArrays", {"id", "the_array"},
+                        {{1, Array<std::string>{}},           // Empty array
+                         {2, Null<Array<std::string>>()}}));  // NULL array
+
+  // UNNEST of empty or NULL array should return 0 rows
+  EXPECT_THAT(
+      Query("SELECT ewa1_0.id, a1_0.ordinality, a1_0.a1_0 "
+            "FROM EntityWithArrays ewa1_0 "
+            "JOIN UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 ON true "
+            "ORDER BY ewa1_0.id, a1_0.ordinality"),
+      IsOkAndHoldsRows({}));
+}
+
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_Join) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  GOOGLESQL_EXPECT_OK(MultiInsert(
+      "EntityWithArrays", {"id", "the_array"},
+      {{2, Array<std::string>{"Douglas Adams", "Suzanne Collins"}}}));
+
+  // Join unnested array values with users table on name
+  EXPECT_THAT(
+      Query("SELECT ewa1_0.id, a1_0.ordinality, u.user_id "
+            "FROM EntityWithArrays ewa1_0 "
+            "JOIN UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 ON true "
+            "JOIN users u ON a1_0.a1_0 = u.name "
+            "ORDER BY ewa1_0.id, a1_0.ordinality"),
+      IsOkAndHoldsRows({{2, 1, 1}, {2, 2, 2}}));
+}
+
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_CommaJoin) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  GOOGLESQL_EXPECT_OK(MultiInsert("EntityWithArrays", {"id", "the_array"},
+                        {{2, Array<std::string>{"abc", "def"}}}));
+
+  // Comma join (Cross Join)
+  EXPECT_THAT(Query("SELECT ewa1_0.id, a1_0.ordinality, a1_0.a1_0 "
+                    "FROM EntityWithArrays ewa1_0, "
+                    "UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 "
+                    "ORDER BY ewa1_0.id, a1_0.ordinality"),
+              IsOkAndHoldsRows({{2, 1, "abc"}, {2, 2, "def"}}));
+}
+
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_LeftJoin) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  GOOGLESQL_EXPECT_OK(MultiInsert("EntityWithArrays", {"id", "the_array"},
+                        {{1, Array<std::string>{}},        // Empty array
+                         {2, Null<Array<std::string>>()},  // NULL array
+                         {3, Array<std::string>{"xyz"}}}));
+
+  // LEFT JOIN should preserve rows with empty/NULL arrays, returning NULLs for
+  // unnested columns
+  EXPECT_THAT(
+      Query("SELECT ewa1_0.id, a1_0.ordinality, a1_0.a1_0 "
+            "FROM EntityWithArrays ewa1_0 "
+            "LEFT JOIN UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 ON true "
+            "ORDER BY ewa1_0.id, a1_0.ordinality"),
+      IsOkAndHoldsRows({{1, Null<int64_t>(), Null<std::string>()},
+                        {2, Null<int64_t>(), Null<std::string>()},
+                        {3, 1, "xyz"}}));
+}
+
 TEST_P(QueryTest, UnnestWithOrdinality) {
   if (GetParam() == database_api::DatabaseDialect::GOOGLE_STANDARD_SQL) {
     GTEST_SKIP();
@@ -1002,6 +1159,200 @@ TEST_P(QueryTest, LockScannedRangesHintInQuery) {
           txn, absl::Substitute("$0SELECT age FROM users WHERE user_id = 2",
                                 lock_hint)),
       IsOkAndHoldsRows({{61}}));
+}
+
+std::vector<DistinctTestCase> GetGSqlIsDistinctFromNullTestCases() {
+  return {
+      {"NULL", "NULL", false},
+      {"true", "NULL", true},
+      {"false", "NULL", true},
+      {"1", "NULL", true},
+      {"CAST(1.5 AS FLOAT32)", "NULL", true},
+      {"CAST('inf' AS FLOAT32)", "NULL", true},
+      {"1.5", "NULL", true},
+      {"NUMERIC '123.456'", "NULL", true},
+      {"DATE '2023-01-01'", "NULL", true},
+      {"TIMESTAMP '2023-01-01 00:00:00 UTC'", "NULL", true},
+      {"INTERVAL '1' YEAR", "NULL", true},
+      {"'hello'", "NULL", true},
+      {"b'hello'", "NULL", true},
+  };
+}
+
+std::vector<DistinctTestCase> GetPGIsDistinctFromNullTestCases() {
+  return {
+      {"NULL::int", "NULL", false},
+      {"true", "NULL", true},
+      {"false", "NULL", true},
+      {"1::bigint", "NULL", true},
+      {"'1.5'::float4", "NULL", true},
+      {"'1.5'::float8", "NULL", true},
+      {"'123.456'::numeric", "NULL", true},
+      {"'2023-01-01'::date", "NULL", true},
+      {"'2023-01-01 00:00:00+00'::timestamptz", "NULL", true},
+      {"'1 year'::interval", "NULL", true},
+      {"'hello'::varchar", "NULL", true},
+      {"E'\\\\x68656c6c6f'::bytea", "NULL", true},
+      {"123::oid", "NULL", true},
+  };
+}
+
+TEST_P(QueryTest, IsDistinctFromNull) {
+  RunDistinctTests(GetParam() == database_api::DatabaseDialect::POSTGRESQL
+                       ? GetPGIsDistinctFromNullTestCases()
+                       : GetGSqlIsDistinctFromNullTestCases());
+}
+
+std::vector<DistinctTestCase> GetGSqlIsDistinctFromValuesTestCases() {
+  return {
+      {"true", "false", true},
+      {"1", "2", true},
+      {"CAST(1.5 AS FLOAT32)", "CAST(2.5 AS FLOAT32)", true},
+      {"1.5", "2.5", true},
+      {"NUMERIC '123.456'", "NUMERIC '654.321'", true},
+      {"DATE '2023-01-01'", "DATE '2023-01-02'", true},
+      {"TIMESTAMP '2023-01-01 00:00:00 UTC'",
+       "TIMESTAMP '2023-01-02 00:00:00 UTC'", true},
+      {"INTERVAL '1' YEAR", "INTERVAL '2' YEAR", true},
+      {"'hello'", "'world'", true},
+      {"b'hello'", "b'world'", true},
+  };
+}
+
+std::vector<DistinctTestCase> GetPGIsDistinctFromValuesTestCases() {
+  return {
+      {"true", "false", true},
+      {"1::bigint", "2::bigint", true},
+      {"'1.5'::float4", "'2.5'::float4", true},
+      {"'1.5'::float8", "'2.5'::float8", true},
+      {"'123.456'::numeric", "'654.321'::numeric", true},
+      {"'2023-01-01'::date", "'2023-01-02'::date", true},
+      {"'2023-01-01 00:00:00+00'::timestamptz",
+       "'2023-01-02 00:00:00+00'::timestamptz", true},
+      {"'1 year'::interval", "'2 years'::interval", true},
+      {"'hello'::varchar", "'world'::varchar", true},
+      {"E'\\\\x68656c6c6f'::bytea", "E'\\\\x776f726c64'::bytea", true},
+      {"123::oid", "456::oid", true},
+  };
+}
+
+TEST_P(QueryTest, IsDistinctFromValues) {
+  RunDistinctTests(GetParam() == database_api::DatabaseDialect::POSTGRESQL
+                       ? GetPGIsDistinctFromValuesTestCases()
+                       : GetGSqlIsDistinctFromValuesTestCases());
+}
+
+std::vector<DistinctTestCase> GetGSqlIsDistinctFromSimilarValuesTestCases() {
+  return {
+      {"true", "true", false},
+      {"1", "1", false},
+      {"CAST('nan' AS FLOAT32)", "CAST('nan' AS FLOAT32)", false},
+      {"CAST('nan' AS FLOAT64)", "CAST('nan' AS FLOAT64)", false},
+      {"CAST('nan' AS FLOAT64)", "1.0", true},
+      {"CAST(0.0 AS FLOAT64)", "CAST(-0.0 AS FLOAT64)", false},
+      {"NUMERIC '123.456000'", "NUMERIC '123.456'", false},
+      {"INTERVAL '1' YEAR", "INTERVAL '12' MONTH", false},
+      {"TIMESTAMP '2023-01-01 00:00:00.000000000 UTC'",
+       "TIMESTAMP '2023-01-01 00:00:00 UTC'", false},
+      {"'hello'", "'hello'", false},
+      {"'hello'", "'HELLO'", true},
+      {"b'hello'", "b'hello'", false},
+  };
+}
+
+std::vector<DistinctTestCase> GetPGIsDistinctFromSimilarValuesTestCases() {
+  return {
+      {"true", "true", false},
+      {"1::bigint", "1::bigint", false},
+      {"'nan'::float4", "'nan'::float4", false},
+      {"'nan'::float8", "'nan'::float8", false},
+      {"'nan'::float8", "1.0::float8", true},
+      {"'0.0'::float8", "'-0.0'::float8", false},
+      {"'123.456000'::numeric", "'123.456'::numeric", false},
+      {"'1 year'::interval", "'12 months'::interval", false},
+      {"'2023-01-01 00:00:00.000000+00'::timestamptz",
+       "'2023-01-01 00:00:00+00'::timestamptz", false},
+      {"'hello'::varchar", "'hello'::varchar", false},
+      {"'hello'::varchar", "'HELLO'::varchar", true},
+      {"E'\\\\x68656c6c6f'::bytea", "E'\\\\x68656c6c6f'::bytea", false},
+  };
+}
+
+TEST_P(QueryTest, IsDistinctFromSimilarValues) {
+  RunDistinctTests(GetParam() == database_api::DatabaseDialect::POSTGRESQL
+                       ? GetPGIsDistinctFromSimilarValuesTestCases()
+                       : GetGSqlIsDistinctFromSimilarValuesTestCases());
+}
+
+TEST_P(QueryTest, IsDistinctFromParameters) {
+  if (GetParam() == database_api::DatabaseDialect::POSTGRESQL) {
+    EXPECT_THAT(QueryWithParams("SELECT $1::bigint IS DISTINCT FROM $2::bigint",
+                                {{"p1", Value(1)}, {"p2", Null<int64_t>()}}),
+                IsOkAndHoldsRow(true));
+    EXPECT_THAT(
+        QueryWithParams("SELECT $1::bigint IS NOT DISTINCT FROM $2::bigint",
+                        {{"p1", Null<int64_t>()}, {"p2", Null<int64_t>()}}),
+        IsOkAndHoldsRow(true));
+    EXPECT_THAT(QueryWithParams("SELECT $1::bigint IS DISTINCT FROM $2::bigint",
+                                {{"p1", Value(1)}, {"p2", Value(2)}}),
+                IsOkAndHoldsRow(true));
+    EXPECT_THAT(QueryWithParams("SELECT $1::bigint IS DISTINCT FROM $2::bigint",
+                                {{"p1", Value(1)}, {"p2", Value(1)}}),
+                IsOkAndHoldsRow(false));
+  } else {
+    EXPECT_THAT(QueryWithParams("SELECT @p1 IS DISTINCT FROM @p2",
+                                {{"p1", Value(1)}, {"p2", Null<int64_t>()}}),
+                IsOkAndHoldsRow(true));
+    EXPECT_THAT(
+        QueryWithParams("SELECT @p1 IS NOT DISTINCT FROM @p2",
+                        {{"p1", Null<int64_t>()}, {"p2", Null<int64_t>()}}),
+        IsOkAndHoldsRow(true));
+    EXPECT_THAT(QueryWithParams("SELECT @p1 IS DISTINCT FROM @p2",
+                                {{"p1", Value(1)}, {"p2", Value(2)}}),
+                IsOkAndHoldsRow(true));
+    EXPECT_THAT(QueryWithParams("SELECT @p1 IS DISTINCT FROM @p2",
+                                {{"p1", Value(1)}, {"p2", Value(1)}}),
+                IsOkAndHoldsRow(false));
+  }
+}
+
+TEST_P(QueryTest, IsDistinctFromDisallowedTypes) {
+  if (GetParam() == database_api::DatabaseDialect::POSTGRESQL) {
+    EXPECT_THAT(Query("SELECT ARRAY[1,2,3] IS DISTINCT FROM ARRAY[1,2,3]"),
+                StatusIs(absl::StatusCode::kUnimplemented));
+    EXPECT_THAT(Query("SELECT ARRAY[1,2,3] IS NOT DISTINCT FROM ARRAY[1,2,3]"),
+                StatusIs(absl::StatusCode::kUnimplemented));
+  } else {
+    EXPECT_THAT(Query("SELECT ARRAY[1,2,3] IS DISTINCT FROM ARRAY[1,2,3]"),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+    EXPECT_THAT(Query("SELECT ARRAY[1,2,3] IS NOT DISTINCT FROM ARRAY[1,2,3]"),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+    EXPECT_THAT(
+        Query("SELECT STRUCT(1, 2, 3) IS DISTINCT FROM STRUCT(1, 2, 3)"),
+        StatusIs(absl::StatusCode::kInvalidArgument));
+    EXPECT_THAT(
+        Query("SELECT STRUCT(1, 2, 3) IS NOT DISTINCT FROM STRUCT(1, 2, 3)"),
+        StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+}
+
+TEST_P(QueryTest, IsDistinctFromTableQueries) {
+  PopulateDatabase();
+
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE age IS DISTINCT FROM 49 ORDER BY "
+            "user_id"),
+      IsOkAndHoldsRows({{2}, {3}}));
+  EXPECT_THAT(Query("SELECT user_id FROM users WHERE age IS NOT DISTINCT FROM "
+                    "49 ORDER BY user_id"),
+              IsOkAndHoldsRows({{1}}));
+
+  EXPECT_THAT(Query("SELECT int_val FROM scalar_types_table WHERE bool_val IS "
+                    "DISTINCT FROM NULL ORDER BY int_val"),
+              IsOkAndHoldsRows({{1}}));
+  EXPECT_THAT(Query("SELECT int_val FROM scalar_types_table WHERE bool_val IS "
+                    "NOT DISTINCT FROM NULL ORDER BY int_val"),
+              IsOkAndHoldsRows({{0}}));
 }
 }  // namespace
 

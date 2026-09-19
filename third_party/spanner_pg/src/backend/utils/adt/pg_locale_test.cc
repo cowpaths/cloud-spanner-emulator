@@ -2,7 +2,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 
 extern "C" {
   extern struct lconv* PGLC_localeconv(void);
@@ -15,6 +15,7 @@ extern "C" {
 
 namespace {
 
+using ::testing::AnyOf;
 using ::testing::Eq;
 using ::testing::IsNull;
 using ::testing::StrEq;
@@ -23,12 +24,17 @@ TEST(PgLocaleTest, ReturnsEnUsLocaleMonetaryAndNumericSymbols) {
   struct lconv* locale = PGLC_localeconv();
   EXPECT_THAT(locale->decimal_point, StrEq("."));
   EXPECT_THAT(locale->thousands_sep, StrEq(","));
-  EXPECT_THAT(locale->grouping, StrEq("\x3\x3"));
+  // glibc's en_US locale data spells the grouping rule out as two explicit
+  // 3-byte groups ("\x3\x3"); BSD/macOS's collapses it to the minimal
+  // one-byte form ("\x3") and relies on the implicit repeat-last-group
+  // convention. Both mean "group every 3 digits, forever" - accept either
+  // encoding rather than pinning to glibc's specific spelling.
+  EXPECT_THAT(locale->grouping, AnyOf(StrEq("\x3\x3"), StrEq("\x3")));
   EXPECT_THAT(locale->int_curr_symbol, StrEq("USD "));
   EXPECT_THAT(locale->currency_symbol, StrEq("$"));
   EXPECT_THAT(locale->mon_decimal_point, StrEq("."));
   EXPECT_THAT(locale->mon_thousands_sep, StrEq(","));
-  EXPECT_THAT(locale->mon_grouping, StrEq("\x3\x3"));
+  EXPECT_THAT(locale->mon_grouping, AnyOf(StrEq("\x3\x3"), StrEq("\x3")));
   EXPECT_THAT(locale->positive_sign, StrEq(""));
   EXPECT_THAT(locale->negative_sign, StrEq("-"));
   EXPECT_THAT(locale->int_frac_digits, Eq(2));

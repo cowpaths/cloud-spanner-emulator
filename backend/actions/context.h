@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-#include "zetasql/public/value.h"
+#include "googlesql/public/value.h"
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "backend/actions/ops.h"
@@ -52,12 +52,12 @@ class EffectsBuffer {
   // Adds an insert operation to the effects buffer.
   virtual void Insert(const Table* table, const Key& key,
                       absl::Span<const Column* const> columns,
-                      const std::vector<zetasql::Value>& values) = 0;
+                      const std::vector<googlesql::Value>& values) = 0;
 
   // Adds an update operation to the effects buffer.
   virtual void Update(const Table* table, const Key& key,
                       absl::Span<const Column* const> columns,
-                      const std::vector<zetasql::Value>& values) = 0;
+                      const std::vector<googlesql::Value>& values) = 0;
 
   // Adds a delete operation to the effects buffer.
   virtual void Delete(const Table* table, const Key& key) = 0;
@@ -109,6 +109,10 @@ class ReadOnlyStore {
   virtual absl::StatusOr<ValueList> ReadCommitted(
       const Table* table, const Key& key,
       std::vector<const Column*> columns) const = 0;
+
+  // Returns true if the given column has been written with a pending commit
+  // timestamp in this transaction.
+  virtual bool HasPendingCommitTimestamp(const Column* column) const = 0;
 };
 
 // ActionContext contains the context in which an action operates.

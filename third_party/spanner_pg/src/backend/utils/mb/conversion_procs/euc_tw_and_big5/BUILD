@@ -43,7 +43,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_binary(
     name = "euc_tw_and_big5.so",
@@ -56,7 +56,9 @@ cc_binary(
         "-fexceptions",
     ],
     linkopts = select({
-        "@bazel_tools//src/conditions:darwin": [],
+        "@bazel_tools//src/conditions:darwin": [
+            "-Wl,-undefined,dynamic_lookup",
+        ],
         "//conditions:default": [
             "-Wl,--version-script=$(location :exports.ld)",
             "-Wl,--undefined-version",
