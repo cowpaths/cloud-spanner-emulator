@@ -174,6 +174,7 @@ cc_library(
 
 cc_test(
     name = "query_engine_test",
+    size = "large",
     srcs = [
         "query_engine_test.cc",
     ],
