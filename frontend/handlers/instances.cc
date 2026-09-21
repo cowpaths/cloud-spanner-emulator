@@ -24,16 +24,18 @@
 #include "backend/storage/wal_writer.h"
 #include "common/errors.h"
 #include "common/limits.h"
+#include "frontend/collections/instance_partition_manager.h"
 #include "frontend/collections/operation_manager.h"
 #include "frontend/common/labels.h"
 #include "frontend/common/uris.h"
 #include "frontend/converters/time.h"
 #include "frontend/entities/instance.h"
+#include "frontend/entities/instance_partition.h"
 #include "frontend/entities/operation.h"
 #include "frontend/server/handler.h"
+#include "googlesql/base/status_macros.h"
 #include "re2/re2.h"
 #include "absl/status/status.h"
-#include "zetasql/base/status_macros.h"
 
 namespace instance_api = ::google::spanner::admin::instance::v1;
 namespace operations_api = ::google::longrunning;
@@ -66,7 +68,7 @@ absl::Status ListInstanceConfigs(
     const instance_api::ListInstanceConfigsRequest* request,
     instance_api::ListInstanceConfigsResponse* response) {
   absl::string_view project_id;
-  ZETASQL_RETURN_IF_ERROR(ParseProjectUri(request->parent(), &project_id));
+  GOOGLESQL_RETURN_IF_ERROR(ParseProjectUri(request->parent(), &project_id));
   response->add_instance_configs();
   *response->mutable_instance_configs(0) =
       GetEmulatorInstanceConfig(project_id);
@@ -80,7 +82,7 @@ absl::Status GetInstanceConfig(
     RequestContext* ctx, const instance_api::GetInstanceConfigRequest* request,
     instance_api::InstanceConfig* response) {
   absl::string_view project_id, instance_config_id;
-  ZETASQL_RETURN_IF_ERROR(ParseInstanceConfigUri(request->name(), &project_id,
+  GOOGLESQL_RETURN_IF_ERROR(ParseInstanceConfigUri(request->name(), &project_id,
                                          &instance_config_id));
   if (instance_config_id != kEmulatorInstanceConfig) {
     return error::InstanceConfigNotFound(instance_config_id);
@@ -96,16 +98,16 @@ absl::Status ListInstances(RequestContext* ctx,
                            instance_api::ListInstancesResponse* response) {
   // Validate that the ListInstances request is for a valid project.
   absl::string_view project_id;
-  ZETASQL_RETURN_IF_ERROR(ParseProjectUri(request->parent(), &project_id));
+  GOOGLESQL_RETURN_IF_ERROR(ParseProjectUri(request->parent(), &project_id));
 
   // Validate that the page_token provided is a valid instance_uri.
   if (!request->page_token().empty()) {
     absl::string_view project_id, instance_id;
-    ZETASQL_RETURN_IF_ERROR(
+    GOOGLESQL_RETURN_IF_ERROR(
         ParseInstanceUri(request->page_token(), &project_id, &instance_id));
   }
 
-  ZETASQL_ASSIGN_OR_RETURN(
+  GOOGLESQL_ASSIGN_OR_RETURN(
       std::vector<std::shared_ptr<Instance>> instances,
       ctx->env()->instance_manager()->ListInstances(request->parent()));
 
@@ -134,7 +136,7 @@ REGISTER_GRPC_HANDLER(InstanceAdmin, ListInstances);
 absl::Status GetInstance(RequestContext* ctx,
                          const instance_api::GetInstanceRequest* request,
                          instance_api::Instance* response) {
-  ZETASQL_ASSIGN_OR_RETURN(std::shared_ptr<Instance> instance,
+  GOOGLESQL_ASSIGN_OR_RETURN(std::shared_ptr<Instance> instance,
                    GetInstance(ctx, request->name()));
   instance->ToProto(response);
   return absl::OkStatus();
@@ -147,7 +149,7 @@ absl::Status CreateInstance(RequestContext* ctx,
                             operations_api::Operation* response) {
   // Verify that the instance creation request is valid.
   absl::string_view project_id;
-  ZETASQL_RETURN_IF_ERROR(ParseProjectUri(request->parent(), &project_id));
+  GOOGLESQL_RETURN_IF_ERROR(ParseProjectUri(request->parent(), &project_id));
   std::string instance_uri =
       MakeInstanceUri(project_id, request->instance_id());
   if (!request->instance().name().empty() &&
@@ -156,13 +158,13 @@ absl::Status CreateInstance(RequestContext* ctx,
   }
 
   // Validate instance name.
-  ZETASQL_RETURN_IF_ERROR(ValidateInstanceId(request->instance_id()));
+  GOOGLESQL_RETURN_IF_ERROR(ValidateInstanceId(request->instance_id()));
 
   // Validate labels.
-  ZETASQL_RETURN_IF_ERROR(ValidateLabels(request->instance().labels()));
+  GOOGLESQL_RETURN_IF_ERROR(ValidateLabels(request->instance().labels()));
 
   // Create the instance.
-  ZETASQL_ASSIGN_OR_RETURN(std::shared_ptr<Instance> instance,
+  GOOGLESQL_ASSIGN_OR_RETURN(std::shared_ptr<Instance> instance,
                    ctx->env()->instance_manager()->CreateInstance(
                        instance_uri, request->instance()));
 
@@ -175,11 +177,11 @@ absl::Status CreateInstance(RequestContext* ctx,
     instance_api::Instance inst_proto;
     instance->ToProto(&inst_proto);
     ci->set_instance_proto(inst_proto.SerializeAsString());
-    ZETASQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
+    GOOGLESQL_RETURN_IF_ERROR(ctx->env()->wal_writer()->Append(wal_record));
   }
 
   // Create an operation tracking this instance creation.
-  ZETASQL_ASSIGN_OR_RETURN(std::shared_ptr<Operation> operation,
+  GOOGLESQL_ASSIGN_OR_RETURN(std::shared_ptr<Operation> operation,
                    ctx->env()->operation_manager()->CreateOperation(
                        instance_uri, OperationManager::kAutoGeneratedId));
 
@@ -190,7 +192,7 @@ absl::Status CreateInstance(RequestContext* ctx,
   *metadata_pb.mutable_instance() = instance_pb;
 
   // Update the start time of the LRO.
-  ZETASQL_ASSIGN_OR_RETURN(*metadata_pb.mutable_start_time(),
+  GOOGLESQL_ASSIGN_OR_RETURN(*metadata_pb.mutable_start_time(),
                    TimestampToProto(ctx->env()->clock()->Now()));
   operation->SetMetadata(metadata_pb);
 
@@ -204,7 +206,7 @@ absl::Status CreateInstance(RequestContext* ctx,
   //  operation->ToProto(response);
 
   // Update the endtime after the LRO is conceptually completed.
-  ZETASQL_ASSIGN_OR_RETURN(*metadata_pb.mutable_end_time(),
+  GOOGLESQL_ASSIGN_OR_RETURN(*metadata_pb.mutable_end_time(),
                    TimestampToProto(ctx->env()->clock()->Now()));
   operation->SetMetadata(metadata_pb);
   operation->SetResponse(instance_pb);
@@ -229,23 +231,33 @@ absl::Status DeleteInstance(RequestContext* ctx,
                             const instance_api::DeleteInstanceRequest* request,
                             protobuf_api::Empty* response) {
   absl::string_view project_id, instance_id;
-  ZETASQL_RETURN_IF_ERROR(ParseInstanceUri(request->name(), &project_id, &instance_id));
+  GOOGLESQL_RETURN_IF_ERROR(ParseInstanceUri(request->name(), &project_id, &instance_id));
 
   // Clean up resources associated with the instance.
-  ZETASQL_ASSIGN_OR_RETURN(
+  GOOGLESQL_ASSIGN_OR_RETURN(
       std::vector<std::shared_ptr<Database>> databases,
       ctx->env()->database_manager()->ListDatabases(request->name()));
   for (const auto& database : databases) {
-    ZETASQL_ASSIGN_OR_RETURN(
+    GOOGLESQL_ASSIGN_OR_RETURN(
         std::vector<std::shared_ptr<Session>> sessions,
         ctx->env()->session_manager()->ListSessions(
             database->database_uri(), /*include_multiplex_sessions=*/true));
     for (const auto& session : sessions) {
-      ZETASQL_RETURN_IF_ERROR(ctx->env()->session_manager()->DeleteSession(
+      GOOGLESQL_RETURN_IF_ERROR(ctx->env()->session_manager()->DeleteSession(
           session->session_uri(), /*delete_multiplex_sessions=*/true));
     }
-    ZETASQL_RETURN_IF_ERROR(ctx->env()->database_manager()->DeleteDatabase(
+    GOOGLESQL_RETURN_IF_ERROR(ctx->env()->database_manager()->DeleteDatabase(
         database->database_uri()));
+  }
+
+  // Clean up instance partitions associated with the instance.
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::vector<std::shared_ptr<InstancePartition>> partitions,
+      ctx->env()->instance_partition_manager()->ListInstancePartitions(
+          request->name()));
+  for (const auto& partition : partitions) {
+    ctx->env()->instance_partition_manager()->DeleteInstancePartition(
+        partition->partition_uri());
   }
 
   // Clean up the instance.

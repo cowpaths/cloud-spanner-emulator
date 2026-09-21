@@ -20,7 +20,7 @@
 #include <cstdint>
 #include <limits>
 
-#include "zetasql/public/type.h"
+#include "googlesql/public/type.h"
 
 constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
 
@@ -42,6 +42,15 @@ constexpr char kGetTableColumnIdentityStateFunctionName[] =
 
 constexpr char kGetNextSequenceValueFunctionName[] = "get_next_sequence_value";
 
+// Name of the ai.if function.
+constexpr char kAiIfFunctionName[] = "ai.if";
+
+// Name of the ai.score function.
+constexpr char kAiScoreFunctionName[] = "ai.score";
+
+// Name of the ai.classify function.
+constexpr char kAiClassifyFunctionName[] = "ai.classify";
+
 // Name of the ml_predict_row function.
 constexpr char kMlPredictRowFunctionName[] = "ml_predict_row";
 
@@ -61,7 +70,7 @@ constexpr char kCommitTimestampIdentifier[] = "spanner.commit_timestamp()";
 // have a timestamp in future and thus this sentinel value is not a valid value
 // for the column to be passed by a client.
 constexpr absl::Time kCommitTimestampValueSentinel =
-    absl::FromUnixMicros(zetasql::types::kTimestampMax);
+    absl::FromUnixMicros(googlesql::types::kTimestampMax);
 
 // gRPC ResourceInfo binary metadata header.
 constexpr char kResourceInfoBinaryHeader[] = "google.rpc.resourceinfo-bin";
@@ -85,6 +94,10 @@ constexpr char kDatabaseResourceType[] =
 // Instance resource type.
 constexpr char kInstanceResourceType[] =
     "type.googleapis.com/google.spanner.admin.instance.v1.Instance";
+
+// Instance partition resource type.
+constexpr char kInstancePartitionResourceType[] =
+    "type.googleapis.com/google.spanner.admin.instance.v1.InstancePartition";
 
 // The default timezone used by the query engine.
 constexpr char kDefaultTimeZone[] = "America/Los_Angeles";
@@ -128,6 +141,8 @@ constexpr char kChangeStreamTvfOutputFormat[] = R"(ARRAY<STRUCT<
 constexpr char kChangeStreamTvfStructPrefix[] = "READ_";
 // Prefix for change stream tvf in postgres dialect
 constexpr char kChangeStreamTvfJsonPrefix[] = "read_json_";
+// Prefix for change stream tvf in postgres dialect for mutable change streams.
+constexpr char kChangeStreamTvfProtoBytesPrefix[] = "read_proto_bytes_";
 // Prefix for change stream data table
 static constexpr char kChangeStreamDataTablePrefix[] = "_change_stream_data_";
 // Prefix for change stream partition table

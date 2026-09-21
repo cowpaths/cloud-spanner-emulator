@@ -33,7 +33,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "absl/log/scoped_mock_log.h"
 #include "absl/status/status.h"
 #include "third_party/spanner_pg/postgres_includes/all.h"
@@ -44,7 +44,7 @@ namespace test {
 namespace {
 
 using ::testing::Optional;
-using ::zetasql_base::testing::StatusIs;
+using ::googlesql_base::testing::StatusIs;
 
 // Checks that most fields on an ErrorData are empty.
 // DELIBERATELY SKIPS elevel, message, and sqlerrcode
@@ -89,7 +89,7 @@ TEST(PostgresEreportException, EmptyEreport) {
     EXPECT_EQ(exc.error_data().elevel, 0);
     EXPECT_EQ(exc.error_data().message, nullptr);
     EXPECT_EQ(exc.error_data().sqlerrcode, 0);
-    EXPECT_EQ(exc.error_status(), absl::nullopt);
+    EXPECT_EQ(exc.error_status(), std::nullopt);
   }
 
   EXPECT_TRUE(caught_exception);
@@ -149,7 +149,7 @@ TEST(PostgresEreportException, EmptyThrow) {
     // Message should be copied so pointers aren't the same
     EXPECT_NE(exc.error_data().message, error_message.data());
     EXPECT_EQ(exc.error_data().sqlerrcode, 21);
-    EXPECT_EQ(exc.error_status(), absl::nullopt);
+    EXPECT_EQ(exc.error_status(), std::nullopt);
   }
 
   EXPECT_TRUE(caught_exception);

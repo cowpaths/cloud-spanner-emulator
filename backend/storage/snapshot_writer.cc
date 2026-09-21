@@ -45,7 +45,7 @@
 #include "frontend/collections/instance_manager.h"
 #include "frontend/entities/database.h"
 #include "frontend/entities/instance.h"
-#include "zetasql/base/status_macros.h"
+#include "googlesql/base/status_macros.h"
 
 namespace google {
 namespace spanner {
@@ -82,7 +82,7 @@ absl::StatusOr<PersistedStorage> SnapshotWriter::SerializeStorage(
   // read_timestamp may not align with committed data timestamps.
   ReadOnlyOptions read_options;
   read_options.bound = TimestampBound::kStrongRead;
-  ZETASQL_ASSIGN_OR_RETURN(auto txn,
+  GOOGLESQL_ASSIGN_OR_RETURN(auto txn,
                    database->CreateReadOnlyTransaction(read_options));
 
   // Iterate all tables in the schema.
@@ -113,7 +113,7 @@ absl::StatusOr<PersistedStorage> SnapshotWriter::SerializeStorage(
     read_arg.columns = column_names;
 
     std::unique_ptr<RowCursor> cursor;
-    ZETASQL_RETURN_IF_ERROR(txn->Read(read_arg, &cursor));
+    GOOGLESQL_RETURN_IF_ERROR(txn->Read(read_arg, &cursor));
 
     while (cursor->Next()) {
       PersistedRow* row_proto = table_proto->add_rows();
@@ -131,8 +131,8 @@ absl::StatusOr<PersistedStorage> SnapshotWriter::SerializeStorage(
         // Find the index of this column in our column list.
         for (int i = 0; i < static_cast<int>(column_names.size()); ++i) {
           if (column_names[i] == pk_name) {
-            zetasql::Value val = cursor->ColumnValue(i);
-            ZETASQL_ASSIGN_OR_RETURN(auto persisted_val, SerializeValue(val));
+            googlesql::Value val = cursor->ColumnValue(i);
+            GOOGLESQL_ASSIGN_OR_RETURN(auto persisted_val, SerializeValue(val));
             PersistedKeyColumn* key_col = key_proto->add_columns();
             *key_col->mutable_value() = std::move(persisted_val);
             key_col->set_is_descending(pk_col->is_descending());
@@ -148,7 +148,7 @@ absl::StatusOr<PersistedStorage> SnapshotWriter::SerializeStorage(
         if (columns[i]->is_generated()) {
           continue;
         }
-        zetasql::Value val = cursor->ColumnValue(i);
+        googlesql::Value val = cursor->ColumnValue(i);
         if (!val.is_valid()) {
           // Skip invalid/unset values.
           continue;
@@ -159,11 +159,11 @@ absl::StatusOr<PersistedStorage> SnapshotWriter::SerializeStorage(
         // We only have one version (the current one at read_timestamp).
         TimestampedValue* tv = cell_proto->add_versions();
         tv->set_timestamp_micros(absl::ToUnixMicros(read_timestamp));
-        ZETASQL_ASSIGN_OR_RETURN(auto persisted_val, SerializeValue(val));
+        GOOGLESQL_ASSIGN_OR_RETURN(auto persisted_val, SerializeValue(val));
         *tv->mutable_value() = std::move(persisted_val);
       }
     }
-    ZETASQL_RETURN_IF_ERROR(cursor->Status());
+    GOOGLESQL_RETURN_IF_ERROR(cursor->Status());
   }
 
   return storage_proto;
@@ -196,7 +196,7 @@ absl::Status SnapshotWriter::WriteSnapshot(
 
   // For each instance, list and serialize all its databases.
   for (const auto& inst_uri : instance_uris) {
-    ZETASQL_ASSIGN_OR_RETURN(auto databases,
+    GOOGLESQL_ASSIGN_OR_RETURN(auto databases,
                      database_manager->ListDatabases(inst_uri));
 
     for (const auto& db : databases) {

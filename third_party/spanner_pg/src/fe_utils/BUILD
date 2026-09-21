@@ -29,8 +29,8 @@
 # MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 #------------------------------------------------------------------------------
 
-load("@com_google_zetasql//bazel:flex.bzl", "genlex")
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_hdl//dependency_support/com_github_westes_flex:flex.bzl", "genlex")
 
 package(
     default_visibility = [
@@ -45,7 +45,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_library(
     name = "fe_utils",

@@ -29,7 +29,7 @@
 #include "absl/synchronization/mutex.h"
 #include "common/errors.h"
 #include "frontend/common/labels.h"
-#include "zetasql/base/status_macros.h"
+#include "googlesql/base/status_macros.h"
 
 namespace google {
 namespace spanner {
@@ -40,7 +40,7 @@ namespace instance_api = ::google::spanner::admin::instance::v1;
 
 absl::StatusOr<std::vector<std::shared_ptr<Instance>>>
 InstanceManager::ListInstances(const std::string& project_uri) const {
-  absl::MutexLock lock(&mu_);
+  absl::ReaderMutexLock lock(mu_);
   std::vector<std::shared_ptr<Instance>> instances;
   // Find all instance that belongs to the project.
   auto itr = instances_.lower_bound(absl::StrCat(project_uri, "/"));
@@ -57,7 +57,7 @@ InstanceManager::ListInstances(const std::string& project_uri) const {
 
 absl::StatusOr<std::shared_ptr<Instance>> InstanceManager::GetInstance(
     const std::string& instance_uri) const {
-  absl::MutexLock lock(&mu_);
+  absl::ReaderMutexLock lock(mu_);
   auto itr = instances_.find(instance_uri);
   if (itr == instances_.end()) {
     return error::InstanceNotFound(instance_uri);
@@ -93,7 +93,7 @@ absl::StatusOr<std::shared_ptr<Instance>> InstanceManager::CreateInstance(
       {instance_uri,
        std::make_shared<Instance>(
            instance_uri, instance_proto.config(), instance_proto.display_name(),
-           processing_units, labels, zetasql_base::Clock::RealClock())});
+           processing_units, labels, googlesql_base::Clock::RealClock())});
   if (!inserted.second) {
     return error::InstanceAlreadyExists(instance_uri);
   }

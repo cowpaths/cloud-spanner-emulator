@@ -49,11 +49,14 @@ class EmulatorFeatureFlags {
     bool enable_fk_enforcement_option = true;
     bool enable_search_index = true;
     bool enable_hidden_column = true;
+    bool enable_tables_without_primary_keys = true;
     bool enable_default_time_zone = true;
     bool enable_property_graph_information_schema = true;
     bool enable_interleave_in = true;
     bool enable_insert_on_conflict_dml = true;
-    bool enable_alter_table_if_exists = false;
+    bool enable_alter_table_if_exists = true;
+    bool enable_mutable_key_range_change_stream = true;
+    bool enable_remote_udf = true;
   };
 
   static const EmulatorFeatureFlags& instance() {
@@ -61,7 +64,7 @@ class EmulatorFeatureFlags {
     return *instance;
   }
 
-  const Flags& flags() const ABSL_LOCKS_EXCLUDED(mu_) {
+  Flags flags() const ABSL_LOCKS_EXCLUDED(mu_) {
     absl::ReaderMutexLock l(&mu_);
     return flags_;
   }

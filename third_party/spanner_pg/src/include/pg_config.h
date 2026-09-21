@@ -457,10 +457,14 @@ extern "C++" {
 #define HAVE_POLL_H 1
 
 /* Define to 1 if you have the `posix_fadvise' function. */
+#ifndef __APPLE__
 #define HAVE_POSIX_FADVISE 1
+#endif
 
 /* Define to 1 if you have the `posix_fallocate' function. */
+#ifndef __APPLE__
 #define HAVE_POSIX_FALLOCATE 1
+#endif
 
 /* Define to 1 if the assembler supports PPC's LWARX mutex hint bit. */
 /* #undef HAVE_PPC_LWARX_MUTEX_HINT */

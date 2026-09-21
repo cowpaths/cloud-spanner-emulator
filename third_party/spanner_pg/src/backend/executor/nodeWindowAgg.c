@@ -23,7 +23,7 @@
  * aggregate function over all rows in the current row's window frame.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -37,6 +37,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_proc.h"
+#include "common/int.h"
 #include "executor/executor.h"
 #include "executor/nodeWindowAgg.h"
 #include "miscadmin.h"
@@ -368,7 +369,8 @@ advance_windowaggregate(WindowAggState *winstate,
 	 * free the prior transValue.  But if transfn returned a pointer to its
 	 * first input, we don't need to do anything.  Also, if transfn returned a
 	 * pointer to a R/W expanded object that is already a child of the
-	 * aggcontext, assume we can adopt that value without copying it.
+	 * aggcontext, assume we can adopt that value without copying it.  (See
+	 * comments for ExecAggCopyTransValue, which this code duplicates.)
 	 */
 	if (!peraggstate->transtypeByVal &&
 		DatumGetPointer(newVal) != DatumGetPointer(peraggstate->transValue))
@@ -533,7 +535,8 @@ advance_windowaggregate_base(WindowAggState *winstate,
 	 * free the prior transValue.  But if invtransfn returned a pointer to its
 	 * first input, we don't need to do anything.  Also, if invtransfn
 	 * returned a pointer to a R/W expanded object that is already a child of
-	 * the aggcontext, assume we can adopt that value without copying it.
+	 * the aggcontext, assume we can adopt that value without copying it. (See
+	 * comments for ExecAggCopyTransValue, which this code duplicates.)
 	 *
 	 * Note: the checks for null values here will never fire, but it seems
 	 * best to have this stanza look just like advance_windowaggregate.
@@ -623,28 +626,26 @@ finalize_windowaggregate(WindowAggState *winstate,
 		}
 		else
 		{
+			Datum		res;
+
 			winstate->curaggcontext = peraggstate->aggcontext;
-			*result = FunctionCallInvoke(fcinfo);
+			res = FunctionCallInvoke(fcinfo);
 			winstate->curaggcontext = NULL;
 			*isnull = fcinfo->isnull;
+			*result = MakeExpandedObjectReadOnly(res,
+												 fcinfo->isnull,
+												 peraggstate->resulttypeLen);
 		}
 	}
 	else
 	{
-		/* Don't need MakeExpandedObjectReadOnly; datumCopy will copy it */
-		*result = peraggstate->transValue;
+		*result =
+			MakeExpandedObjectReadOnly(peraggstate->transValue,
+									   peraggstate->transValueIsNull,
+									   peraggstate->transtypeLen);
 		*isnull = peraggstate->transValueIsNull;
 	}
 
-	/*
-	 * If result is pass-by-ref, make sure it is in the right context.
-	 */
-	if (!peraggstate->resulttypeByVal && !*isnull &&
-		!MemoryContextContains(CurrentMemoryContext,
-							   DatumGetPointer(*result)))
-		*result = datumCopy(*result,
-							peraggstate->resulttypeByVal,
-							peraggstate->resulttypeLen);
 	MemoryContextSwitchTo(oldContext);
 }
 
@@ -1058,13 +1059,14 @@ eval_windowfunction(WindowAggState *winstate, WindowStatePerFunc perfuncstate,
 	*isnull = fcinfo->isnull;
 
 	/*
-	 * Make sure pass-by-ref data is allocated in the appropriate context. (We
-	 * need this in case the function returns a pointer into some short-lived
-	 * tuple, as is entirely possible.)
+	 * The window function might have returned a pass-by-ref result that's
+	 * just a pointer into one of the WindowObject's temporary slots.  That's
+	 * not a problem if it's the only window function using the WindowObject;
+	 * but if there's more than one function, we'd better copy the result to
+	 * ensure it's not clobbered by later window functions.
 	 */
 	if (!perfuncstate->resulttypeByVal && !fcinfo->isnull &&
-		!MemoryContextContains(CurrentMemoryContext,
-							   DatumGetPointer(*result)))
+		winstate->numfuncs > 1)
 		*result = datumCopy(*result,
 							perfuncstate->resulttypeByVal,
 							perfuncstate->resulttypeLen);
@@ -1423,12 +1425,21 @@ row_is_in_frame(WindowAggState *winstate, int64 pos, TupleTableSlot *slot)
 		if (frameOptions & FRAMEOPTION_ROWS)
 		{
 			int64		offset = DatumGetInt64(winstate->endOffsetValue);
+			int64		frameendpos = 0;
 
 			/* rows after current row + offset are out of frame */
 			if (frameOptions & FRAMEOPTION_END_OFFSET_PRECEDING)
 				offset = -offset;
 
-			if (pos > winstate->currentpos + offset)
+			/*
+			 * If we have an overflow, it means the frame end is beyond the
+			 * range of int64.  Since currentpos >= 0, this can only be a
+			 * positive overflow.  We treat this as meaning that the frame
+			 * extends to end of partition.
+			 */
+			if (!pg_add_s64_overflow(winstate->currentpos, offset,
+									 &frameendpos) &&
+				pos > frameendpos)
 				return -1;
 		}
 		else if (frameOptions & (FRAMEOPTION_RANGE | FRAMEOPTION_GROUPS))
@@ -1563,7 +1574,16 @@ update_frameheadpos(WindowAggState *winstate)
 			if (frameOptions & FRAMEOPTION_START_OFFSET_PRECEDING)
 				offset = -offset;
 
-			winstate->frameheadpos = winstate->currentpos + offset;
+			/*
+			 * If we have an overflow, it means the frame head is beyond the
+			 * range of int64.  Since currentpos >= 0, this can only be a
+			 * positive overflow.  We treat this as being beyond end of
+			 * partition.
+			 */
+			if (pg_add_s64_overflow(winstate->currentpos, offset,
+									&winstate->frameheadpos))
+				winstate->frameheadpos = PG_INT64_MAX;
+
 			/* frame head can't go before first row */
 			if (winstate->frameheadpos < 0)
 				winstate->frameheadpos = 0;
@@ -1675,12 +1695,21 @@ update_frameheadpos(WindowAggState *winstate)
 			 * framehead_slot empty.
 			 */
 			int64		offset = DatumGetInt64(winstate->startOffsetValue);
-			int64		minheadgroup;
+			int64		minheadgroup = 0;
 
 			if (frameOptions & FRAMEOPTION_START_OFFSET_PRECEDING)
 				minheadgroup = winstate->currentgroup - offset;
 			else
-				minheadgroup = winstate->currentgroup + offset;
+			{
+				/*
+				 * If we have an overflow, it means the target group is beyond
+				 * the range of int64.  We treat this as "infinity", which
+				 * ensures the loop below advances to end of partition.
+				 */
+				if (pg_add_s64_overflow(winstate->currentgroup, offset,
+										&minheadgroup))
+					minheadgroup = PG_INT64_MAX;
+			}
 
 			tuplestore_select_read_pointer(winstate->buffer,
 										   winstate->framehead_ptr);
@@ -1817,7 +1846,18 @@ update_frametailpos(WindowAggState *winstate)
 			if (frameOptions & FRAMEOPTION_END_OFFSET_PRECEDING)
 				offset = -offset;
 
-			winstate->frametailpos = winstate->currentpos + offset + 1;
+			/*
+			 * If we have an overflow, it means the frame tail is beyond the
+			 * range of int64.  Since currentpos >= 0, this can only be a
+			 * positive overflow.  We treat this as being beyond end of
+			 * partition.
+			 */
+			if (pg_add_s64_overflow(winstate->currentpos, offset,
+									&winstate->frametailpos) ||
+				pg_add_s64_overflow(winstate->frametailpos, 1,
+									&winstate->frametailpos))
+				winstate->frametailpos = PG_INT64_MAX;
+
 			/* smallest allowable value of frametailpos is 0 */
 			if (winstate->frametailpos < 0)
 				winstate->frametailpos = 0;
@@ -1929,12 +1969,21 @@ update_frametailpos(WindowAggState *winstate)
 			 * leave frametailpos = end+1 and frametail_slot empty.
 			 */
 			int64		offset = DatumGetInt64(winstate->endOffsetValue);
-			int64		maxtailgroup;
+			int64		maxtailgroup = 0;
 
 			if (frameOptions & FRAMEOPTION_END_OFFSET_PRECEDING)
 				maxtailgroup = winstate->currentgroup - offset;
 			else
-				maxtailgroup = winstate->currentgroup + offset;
+			{
+				/*
+				 * If we have an overflow, it means the target group is beyond
+				 * the range of int64.  We treat this as "infinity", which
+				 * ensures the loop below advances to end of partition.
+				 */
+				if (pg_add_s64_overflow(winstate->currentgroup, offset,
+										&maxtailgroup))
+					maxtailgroup = PG_INT64_MAX;
+			}
 
 			tuplestore_select_read_pointer(winstate->buffer,
 										   winstate->frametail_ptr);
@@ -2063,11 +2112,12 @@ ExecWindowAgg(PlanState *pstate)
 	if (winstate->all_first)
 	{
 		int			frameOptions = winstate->frameOptions;
-		ExprContext *econtext = winstate->ss.ps.ps_ExprContext;
 		Datum		value;
 		bool		isnull;
 		int16		len;
 		bool		byval;
+
+		econtext = winstate->ss.ps.ps_ExprContext;
 
 		if (frameOptions & FRAMEOPTION_START_OFFSET)
 		{
@@ -2295,6 +2345,23 @@ ExecWindowAgg(PlanState *pstate)
 				if (winstate->use_pass_through)
 				{
 					/*
+					 * When switching into a pass-through mode, we'd better
+					 * NULLify the aggregate results as these are no longer
+					 * updated and NULLifying them avoids the old stale
+					 * results lingering.  Some of these might be byref types
+					 * so we can't have them pointing to free'd memory.  The
+					 * planner insisted that quals used in the runcondition
+					 * are strict, so the top-level WindowAgg will always
+					 * filter these NULLs out in the filter clause.
+					 */
+					numfuncs = winstate->numfuncs;
+					for (i = 0; i < numfuncs; i++)
+					{
+						econtext->ecxt_aggvalues[i] = (Datum) 0;
+						econtext->ecxt_aggnulls[i] = true;
+					}
+
+					/*
 					 * STRICT pass-through mode is required for the top window
 					 * when there is a PARTITION BY clause.  Otherwise we must
 					 * ensure we store tuples that don't match the
@@ -2308,24 +2375,6 @@ ExecWindowAgg(PlanState *pstate)
 					else
 					{
 						winstate->status = WINDOWAGG_PASSTHROUGH;
-
-						/*
-						 * If we're not the top-window, we'd better NULLify
-						 * the aggregate results.  In pass-through mode we no
-						 * longer update these and this avoids the old stale
-						 * results lingering.  Some of these might be byref
-						 * types so we can't have them pointing to free'd
-						 * memory.  The planner insisted that quals used in
-						 * the runcondition are strict, so the top-level
-						 * WindowAgg will filter these NULLs out in the filter
-						 * clause.
-						 */
-						numfuncs = winstate->numfuncs;
-						for (i = 0; i < numfuncs; i++)
-						{
-							econtext->ecxt_aggvalues[i] = (Datum) 0;
-							econtext->ecxt_aggnulls[i] = true;
-						}
 					}
 				}
 				else
@@ -2582,8 +2631,8 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 		wfuncstate->wfuncno = wfuncno;
 
 		/* Check permission to call window function */
-		aclresult = pg_proc_aclcheck(wfunc->winfnoid, GetUserId(),
-									 ACL_EXECUTE);
+		aclresult = object_aclcheck(ProcedureRelationId, wfunc->winfnoid, GetUserId(),
+									ACL_EXECUTE);
 		if (aclresult != ACLCHECK_OK)
 			aclcheck_error(aclresult, OBJECT_FUNCTION,
 						   get_func_name(wfunc->winfnoid));
@@ -2819,7 +2868,7 @@ initialize_peragg(WindowAggState *winstate, WindowFunc *wfunc,
 	if (!OidIsValid(aggform->aggminvtransfn))
 		use_ma_code = false;	/* sine qua non */
 	else if (aggform->aggmfinalmodify == AGGMODIFY_READ_ONLY &&
-		aggform->aggfinalmodify != AGGMODIFY_READ_ONLY)
+			 aggform->aggfinalmodify != AGGMODIFY_READ_ONLY)
 		use_ma_code = true;		/* decision forced by safety */
 	else if (winstate->frameOptions & FRAMEOPTION_START_UNBOUNDED_PRECEDING)
 		use_ma_code = false;	/* non-moving frame head */
@@ -2868,8 +2917,8 @@ initialize_peragg(WindowAggState *winstate, WindowFunc *wfunc,
 		aggOwner = ((Form_pg_proc) GETSTRUCT(procTuple))->proowner;
 		ReleaseSysCache(procTuple);
 
-		aclresult = pg_proc_aclcheck(transfn_oid, aggOwner,
-									 ACL_EXECUTE);
+		aclresult = object_aclcheck(ProcedureRelationId, transfn_oid, aggOwner,
+									ACL_EXECUTE);
 		if (aclresult != ACLCHECK_OK)
 			aclcheck_error(aclresult, OBJECT_FUNCTION,
 						   get_func_name(transfn_oid));
@@ -2877,8 +2926,8 @@ initialize_peragg(WindowAggState *winstate, WindowFunc *wfunc,
 
 		if (OidIsValid(invtransfn_oid))
 		{
-			aclresult = pg_proc_aclcheck(invtransfn_oid, aggOwner,
-										 ACL_EXECUTE);
+			aclresult = object_aclcheck(ProcedureRelationId, invtransfn_oid, aggOwner,
+										ACL_EXECUTE);
 			if (aclresult != ACLCHECK_OK)
 				aclcheck_error(aclresult, OBJECT_FUNCTION,
 							   get_func_name(invtransfn_oid));
@@ -2887,8 +2936,8 @@ initialize_peragg(WindowAggState *winstate, WindowFunc *wfunc,
 
 		if (OidIsValid(finalfn_oid))
 		{
-			aclresult = pg_proc_aclcheck(finalfn_oid, aggOwner,
-										 ACL_EXECUTE);
+			aclresult = object_aclcheck(ProcedureRelationId, finalfn_oid, aggOwner,
+										ACL_EXECUTE);
 			if (aclresult != ACLCHECK_OK)
 				aclcheck_error(aclresult, OBJECT_FUNCTION,
 							   get_func_name(finalfn_oid));
@@ -3139,6 +3188,10 @@ window_gettupleslot(WindowObject winobj, int64 pos, TupleTableSlot *slot)
 	/*
 	 * Now we should be on the tuple immediately before or after the one we
 	 * want, so just fetch forwards or backwards as appropriate.
+	 *
+	 * Notice that we tell tuplestore_gettupleslot to make a physical copy of
+	 * the fetched tuple.  This ensures that the slot's contents remain valid
+	 * through manipulations of the tuplestore, which some callers depend on.
 	 */
 	if (winobj->seekpos > pos)
 	{

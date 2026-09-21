@@ -24,7 +24,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
 #include "absl/status/status.h"
@@ -79,7 +79,7 @@ absl::Status SetUpInstanceAndDatabase(ServerEnv* env,
                                       std::shared_ptr<backend::WalWriter>
                                           wal_writer = nullptr) {
   // Create instance.
-  ZETASQL_RETURN_IF_ERROR(
+  GOOGLESQL_RETURN_IF_ERROR(
       env->instance_manager()
           ->CreateInstance(kInstanceUri, MakeInstanceProto())
           .status());
@@ -90,7 +90,7 @@ absl::Status SetUpInstanceAndDatabase(ServerEnv* env,
   schema_op.statements = ddl;
   schema_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
 
-  ZETASQL_ASSIGN_OR_RETURN(
+  GOOGLESQL_ASSIGN_OR_RETURN(
       auto database,
       env->database_manager()->CreateDatabase(kDatabaseUri, schema_op,
                                               wal_writer));
@@ -98,23 +98,23 @@ absl::Status SetUpInstanceAndDatabase(ServerEnv* env,
   // Insert data via a read-write transaction.
   backend::ReadWriteOptions rw_options;
   backend::RetryState retry_state;
-  ZETASQL_ASSIGN_OR_RETURN(
+  GOOGLESQL_ASSIGN_OR_RETURN(
       auto txn,
       database->backend()->CreateReadWriteTransaction(rw_options, retry_state));
 
   backend::Mutation mutation;
   std::vector<std::string> columns = {"key", "value"};
   std::vector<backend::ValueList> rows;
-  rows.push_back({zetasql::values::Int64(1),
-                  zetasql::values::String("hello")});
-  rows.push_back({zetasql::values::Int64(2),
-                  zetasql::values::String("world")});
-  rows.push_back({zetasql::values::Int64(3),
-                  zetasql::values::String("foo")});
+  rows.push_back({googlesql::values::Int64(1),
+                  googlesql::values::String("hello")});
+  rows.push_back({googlesql::values::Int64(2),
+                  googlesql::values::String("world")});
+  rows.push_back({googlesql::values::Int64(3),
+                  googlesql::values::String("foo")});
   mutation.AddWriteOp(backend::MutationOpType::kInsert, "TestTable",
                       std::move(columns), std::move(rows));
-  ZETASQL_RETURN_IF_ERROR(txn->Write(mutation));
-  ZETASQL_RETURN_IF_ERROR(txn->Commit());
+  GOOGLESQL_RETURN_IF_ERROR(txn->Write(mutation));
+  GOOGLESQL_RETURN_IF_ERROR(txn->Commit());
 
   return absl::OkStatus();
 }
@@ -125,7 +125,7 @@ absl::StatusOr<std::map<int64_t, std::string>> ReadAllRows(
     backend::Database* db) {
   backend::ReadOnlyOptions ro_options;
   ro_options.bound = backend::TimestampBound::kStrongRead;
-  ZETASQL_ASSIGN_OR_RETURN(auto txn, db->CreateReadOnlyTransaction(ro_options));
+  GOOGLESQL_ASSIGN_OR_RETURN(auto txn, db->CreateReadOnlyTransaction(ro_options));
 
   backend::ReadArg read_arg;
   read_arg.table = "TestTable";
@@ -133,7 +133,7 @@ absl::StatusOr<std::map<int64_t, std::string>> ReadAllRows(
   read_arg.columns = {"key", "value"};
 
   std::unique_ptr<backend::RowCursor> cursor;
-  ZETASQL_RETURN_IF_ERROR(txn->Read(read_arg, &cursor));
+  GOOGLESQL_RETURN_IF_ERROR(txn->Read(read_arg, &cursor));
 
   std::map<int64_t, std::string> result;
   while (cursor->Next()) {
@@ -141,7 +141,7 @@ absl::StatusOr<std::map<int64_t, std::string>> ReadAllRows(
     std::string value = cursor->ColumnValue(1).string_value();
     result[key] = value;
   }
-  ZETASQL_RETURN_IF_ERROR(cursor->Status());
+  GOOGLESQL_RETURN_IF_ERROR(cursor->Status());
   return result;
 }
 
@@ -175,34 +175,34 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTrip) {
 
   // Set up source env with data.
   auto src_env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(SetUpInstanceAndDatabase(src_env.get()));
+  GOOGLESQL_ASSERT_OK(SetUpInstanceAndDatabase(src_env.get()));
 
   // Verify data was written.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto src_db,
       src_env->database_manager()->GetDatabase(kDatabaseUri));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto src_rows, ReadAllRows(src_db->backend()));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto src_rows, ReadAllRows(src_db->backend()));
   ASSERT_EQ(src_rows.size(), 3);
 
   // Write snapshot.
-  ZETASQL_ASSERT_OK(backend::SnapshotWriter::WriteSnapshot(
+  GOOGLESQL_ASSERT_OK(backend::SnapshotWriter::WriteSnapshot(
       snapshot_path, src_env->instance_manager(),
       src_env->database_manager()));
 
   // Load snapshot into a fresh env.
   auto dst_env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(
+  GOOGLESQL_ASSERT_OK(
       backend::SnapshotLoader::LoadSnapshot(snapshot_path, dst_env.get())
           .status());
 
   // Verify instance was restored.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto restored_instance,
       dst_env->instance_manager()->GetInstance(kInstanceUri));
   EXPECT_EQ(restored_instance->instance_uri(), kInstanceUri);
 
   // Verify database was restored with correct schema.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto restored_db,
       dst_env->database_manager()->GetDatabase(kDatabaseUri));
   const backend::Schema* schema = restored_db->backend()->GetLatestSchema();
@@ -215,7 +215,7 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTrip) {
   EXPECT_NE(table->FindColumn("value"), nullptr);
 
   // Verify data was restored.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto dst_rows,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto dst_rows,
                         ReadAllRows(restored_db->backend()));
   EXPECT_EQ(dst_rows.size(), 3);
   EXPECT_EQ(dst_rows[1], "hello");
@@ -234,7 +234,7 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTripGeneratedColumn) {
   std::string snapshot_path = test_dir_ + "/snapshot.pb";
 
   auto src_env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(
+  GOOGLESQL_ASSERT_OK(
       src_env->instance_manager()
           ->CreateInstance(kInstanceUri, MakeInstanceProto())
           .status());
@@ -248,7 +248,7 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTripGeneratedColumn) {
   backend::SchemaChangeOperation schema_op;
   schema_op.statements = ddl;
   schema_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto src_db,
       src_env->database_manager()->CreateDatabase(kDatabaseUri, schema_op,
                                                    nullptr));
@@ -258,23 +258,23 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTripGeneratedColumn) {
   {
     backend::ReadWriteOptions rw_options;
     backend::RetryState retry_state;
-    ZETASQL_ASSERT_OK_AND_ASSIGN(
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
         auto txn, src_db->backend()->CreateReadWriteTransaction(
                       rw_options, retry_state));
 
     backend::Mutation mutation;
     std::vector<std::string> columns = {"key", "value"};
     std::vector<backend::ValueList> rows;
-    rows.push_back({zetasql::values::Int64(1), zetasql::values::Int64(10)});
-    rows.push_back({zetasql::values::Int64(2), zetasql::values::Int64(20)});
+    rows.push_back({googlesql::values::Int64(1), googlesql::values::Int64(10)});
+    rows.push_back({googlesql::values::Int64(2), googlesql::values::Int64(20)});
     mutation.AddWriteOp(backend::MutationOpType::kInsert, "GenTable",
                         std::move(columns), std::move(rows));
-    ZETASQL_ASSERT_OK(txn->Write(mutation));
-    ZETASQL_ASSERT_OK(txn->Commit());
+    GOOGLESQL_ASSERT_OK(txn->Write(mutation));
+    GOOGLESQL_ASSERT_OK(txn->Commit());
   }
 
   // Write snapshot.
-  ZETASQL_ASSERT_OK(backend::SnapshotWriter::WriteSnapshot(
+  GOOGLESQL_ASSERT_OK(backend::SnapshotWriter::WriteSnapshot(
       snapshot_path, src_env->instance_manager(),
       src_env->database_manager()));
 
@@ -282,17 +282,17 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTripGeneratedColumn) {
   // FAILED_PRECONDITION: "Cannot write into generated column
   // `GenTable.computed`."
   auto dst_env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(
+  GOOGLESQL_ASSERT_OK(
       backend::SnapshotLoader::LoadSnapshot(snapshot_path, dst_env.get())
           .status());
 
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto restored_db,
       dst_env->database_manager()->GetDatabase(kDatabaseUri));
 
   backend::ReadOnlyOptions ro_options;
   ro_options.bound = backend::TimestampBound::kStrongRead;
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto read_txn, restored_db->backend()->CreateReadOnlyTransaction(
                          ro_options));
 
@@ -302,14 +302,14 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTripGeneratedColumn) {
   read_arg.columns = {"key", "computed"};
 
   std::unique_ptr<backend::RowCursor> cursor;
-  ZETASQL_ASSERT_OK(read_txn->Read(read_arg, &cursor));
+  GOOGLESQL_ASSERT_OK(read_txn->Read(read_arg, &cursor));
 
   std::map<int64_t, int64_t> computed_by_key;
   while (cursor->Next()) {
     computed_by_key[cursor->ColumnValue(0).int64_value()] =
         cursor->ColumnValue(1).int64_value();
   }
-  ZETASQL_ASSERT_OK(cursor->Status());
+  GOOGLESQL_ASSERT_OK(cursor->Status());
 
   EXPECT_EQ(computed_by_key.size(), 2);
   EXPECT_EQ(computed_by_key[1], 11);
@@ -329,17 +329,17 @@ TEST_F(PersistenceManagerTest, WalReplayDataMutations) {
   // Set up source env without WAL first (creates InMemoryStorage).
   auto src_env = std::make_unique<ServerEnv>();
   src_env->set_wal_writer(manager->wal_writer());
-  ZETASQL_ASSERT_OK(SetUpInstanceAndDatabase(src_env.get()));
+  GOOGLESQL_ASSERT_OK(SetUpInstanceAndDatabase(src_env.get()));
 
   // Verify source data.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto src_db,
       src_env->database_manager()->GetDatabase(kDatabaseUri));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto src_rows, ReadAllRows(src_db->backend()));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto src_rows, ReadAllRows(src_db->backend()));
   ASSERT_EQ(src_rows.size(), 3);
 
   // Write a snapshot to capture the initial 3 rows + schema + instances.
-  ZETASQL_ASSERT_OK(manager->SaveState(src_env.get()));
+  GOOGLESQL_ASSERT_OK(manager->SaveState(src_env.get()));
 
   // Recreate manager (SaveState cleared the WAL).
   manager = PersistenceManager::Create(test_dir_);
@@ -347,37 +347,37 @@ TEST_F(PersistenceManagerTest, WalReplayDataMutations) {
   src_env->set_wal_writer(manager->wal_writer());
 
   // Now enable persistence so the next write goes to WAL.
-  ZETASQL_ASSERT_OK(src_db->backend()->EnablePersistence(
+  GOOGLESQL_ASSERT_OK(src_db->backend()->EnablePersistence(
       kDatabaseUri, manager->wal_writer()));
 
   // Write another row — this will only be in the WAL, not in the snapshot.
   {
     backend::ReadWriteOptions rw_options;
     backend::RetryState retry_state;
-    ZETASQL_ASSERT_OK_AND_ASSIGN(
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
         auto txn,
         src_db->backend()->CreateReadWriteTransaction(rw_options, retry_state));
 
     backend::Mutation mutation;
     std::vector<std::string> columns = {"key", "value"};
     std::vector<backend::ValueList> rows;
-    rows.push_back({zetasql::values::Int64(4),
-                    zetasql::values::String("bar")});
+    rows.push_back({googlesql::values::Int64(4),
+                    googlesql::values::String("bar")});
     mutation.AddWriteOp(backend::MutationOpType::kInsert, "TestTable",
                         std::move(columns), std::move(rows));
-    ZETASQL_ASSERT_OK(txn->Write(mutation));
-    ZETASQL_ASSERT_OK(txn->Commit());
+    GOOGLESQL_ASSERT_OK(txn->Write(mutation));
+    GOOGLESQL_ASSERT_OK(txn->Commit());
   }
 
   // Load into fresh env. Snapshot has 3 rows, WAL has the 4th.
   auto dst_env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(manager->RestoreState(dst_env.get()));
+  GOOGLESQL_ASSERT_OK(manager->RestoreState(dst_env.get()));
 
   // Verify all 4 rows are present.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto restored_db,
       dst_env->database_manager()->GetDatabase(kDatabaseUri));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto dst_rows,
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto dst_rows,
                         ReadAllRows(restored_db->backend()));
   EXPECT_EQ(dst_rows.size(), 4);
   EXPECT_EQ(dst_rows[1], "hello");
@@ -405,14 +405,14 @@ TEST_F(PersistenceManagerTest, WalReplayMetadataCreateInstance) {
   instance_api::Instance instance_proto = MakeInstanceProto();
   ci->set_instance_proto(instance_proto.SerializeAsString());
 
-  ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+  GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
 
   // Replay into fresh env.
   auto env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(manager->RestoreState(env.get()));
+  GOOGLESQL_ASSERT_OK(manager->RestoreState(env.get()));
 
   // Verify instance was created.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto instance, env->instance_manager()->GetInstance(kInstanceUri));
   EXPECT_EQ(instance->instance_uri(), kInstanceUri);
 }
@@ -430,7 +430,7 @@ TEST_F(PersistenceManagerTest, WalReplayMetadataCreateDatabase) {
     ci->set_instance_uri(kInstanceUri);
     instance_api::Instance instance_proto = MakeInstanceProto();
     ci->set_instance_proto(instance_proto.SerializeAsString());
-    ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
   }
 
   // Then, create database metadata in WAL.
@@ -445,15 +445,15 @@ TEST_F(PersistenceManagerTest, WalReplayMetadataCreateDatabase) {
     for (const auto& stmt : SimpleSchema()) {
       cd->add_ddl_statements(stmt);
     }
-    ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
   }
 
   // Replay into fresh env.
   auto env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(manager->RestoreState(env.get()));
+  GOOGLESQL_ASSERT_OK(manager->RestoreState(env.get()));
 
   // Verify database was created with schema.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto db, env->database_manager()->GetDatabase(kDatabaseUri));
   const backend::Schema* schema = db->backend()->GetLatestSchema();
   ASSERT_NE(schema, nullptr);
@@ -473,19 +473,19 @@ TEST_F(PersistenceManagerTest, WalReplayMetadataDeleteInstance) {
     ci->set_instance_uri(kInstanceUri);
     instance_api::Instance instance_proto = MakeInstanceProto();
     ci->set_instance_proto(instance_proto.SerializeAsString());
-    ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
   }
   {
     backend::WalRecord record;
     record.set_sequence_number(1);
     auto* meta = record.mutable_metadata_change();
     meta->set_delete_instance_uri(kInstanceUri);
-    ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
   }
 
   // Replay into fresh env.
   auto env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(manager->RestoreState(env.get()));
+  GOOGLESQL_ASSERT_OK(manager->RestoreState(env.get()));
 
   // Instance should not exist.
   auto result = env->instance_manager()->GetInstance(kInstanceUri);
@@ -505,7 +505,7 @@ TEST_F(PersistenceManagerTest, WalReplayMetadataDeleteDatabase) {
     ci->set_instance_uri(kInstanceUri);
     instance_api::Instance instance_proto = MakeInstanceProto();
     ci->set_instance_proto(instance_proto.SerializeAsString());
-    ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
   }
   {
     backend::WalRecord record;
@@ -518,22 +518,22 @@ TEST_F(PersistenceManagerTest, WalReplayMetadataDeleteDatabase) {
     for (const auto& stmt : SimpleSchema()) {
       cd->add_ddl_statements(stmt);
     }
-    ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
   }
   {
     backend::WalRecord record;
     record.set_sequence_number(2);
     auto* meta = record.mutable_metadata_change();
     meta->set_delete_database_uri(kDatabaseUri);
-    ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
   }
 
   // Replay into fresh env.
   auto env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(manager->RestoreState(env.get()));
+  GOOGLESQL_ASSERT_OK(manager->RestoreState(env.get()));
 
   // Instance should exist but database should not.
-  ZETASQL_ASSERT_OK(env->instance_manager()->GetInstance(kInstanceUri).status());
+  GOOGLESQL_ASSERT_OK(env->instance_manager()->GetInstance(kInstanceUri).status());
   auto result = env->database_manager()->GetDatabase(kDatabaseUri);
   EXPECT_FALSE(result.ok());
 }
@@ -551,7 +551,7 @@ TEST_F(PersistenceManagerTest, WalReplaySchemaChange) {
     ci->set_instance_uri(kInstanceUri);
     instance_api::Instance instance_proto = MakeInstanceProto();
     ci->set_instance_proto(instance_proto.SerializeAsString());
-    ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
   }
   {
     backend::WalRecord record;
@@ -564,7 +564,7 @@ TEST_F(PersistenceManagerTest, WalReplaySchemaChange) {
     for (const auto& stmt : SimpleSchema()) {
       cd->add_ddl_statements(stmt);
     }
-    ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
   }
 
   // Add a new column via schema change in WAL.
@@ -576,15 +576,15 @@ TEST_F(PersistenceManagerTest, WalReplaySchemaChange) {
     sc->set_dialect(static_cast<int32_t>(database_api::GOOGLE_STANDARD_SQL));
     sc->add_ddl_statements(
         "ALTER TABLE TestTable ADD COLUMN extra STRING(MAX)");
-    ZETASQL_ASSERT_OK(manager->wal_writer()->Append(record));
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
   }
 
   // Replay into fresh env.
   auto env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(manager->RestoreState(env.get()));
+  GOOGLESQL_ASSERT_OK(manager->RestoreState(env.get()));
 
   // Verify the schema has the new column.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto db, env->database_manager()->GetDatabase(kDatabaseUri));
   const backend::Schema* schema = db->backend()->GetLatestSchema();
   ASSERT_NE(schema, nullptr);
@@ -603,27 +603,27 @@ TEST_F(PersistenceManagerTest, SaveAndRestoreState) {
 
   auto src_env = std::make_unique<ServerEnv>();
   src_env->set_wal_writer(manager->wal_writer());
-  ZETASQL_ASSERT_OK(SetUpInstanceAndDatabase(src_env.get(), manager->wal_writer()));
+  GOOGLESQL_ASSERT_OK(SetUpInstanceAndDatabase(src_env.get(), manager->wal_writer()));
 
   // Save state (snapshot + clear WAL).
-  ZETASQL_ASSERT_OK(manager->SaveState(src_env.get()));
+  GOOGLESQL_ASSERT_OK(manager->SaveState(src_env.get()));
 
   // Restore into fresh env with a new manager.
   auto manager2 = PersistenceManager::Create(test_dir_);
   ASSERT_NE(manager2, nullptr);
 
   auto dst_env = std::make_unique<ServerEnv>();
-  ZETASQL_ASSERT_OK(manager2->RestoreState(dst_env.get()));
+  GOOGLESQL_ASSERT_OK(manager2->RestoreState(dst_env.get()));
 
   // Verify instance was restored.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto instance, dst_env->instance_manager()->GetInstance(kInstanceUri));
   EXPECT_EQ(instance->instance_uri(), kInstanceUri);
 
   // Verify data.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto db, dst_env->database_manager()->GetDatabase(kDatabaseUri));
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto rows, ReadAllRows(db->backend()));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto rows, ReadAllRows(db->backend()));
   EXPECT_EQ(rows.size(), 3);
   EXPECT_EQ(rows[1], "hello");
   EXPECT_EQ(rows[2], "world");

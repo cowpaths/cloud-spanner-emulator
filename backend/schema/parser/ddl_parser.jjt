@@ -812,7 +812,8 @@ void or_replace() :
 void sql_security() :
 {}
 {
-  <INVOKER>
+    <INVOKER>
+  | <DEFINER>
 }
 
 void create_view_statement() :
@@ -882,6 +883,7 @@ void model_column_list() #void:
 {
   "(" column_def() ( LOOKAHEAD(2) "," column_def() )* [ "," ] ")"
 }
+
 
 void drop_statement() :
 {}
@@ -959,6 +961,7 @@ void alter_table_statement() :
     | <REPLACE> row_deletion_policy_clause() #replace_row_deletion_policy
   )
 }
+
 
 void rename_op() :
 {}

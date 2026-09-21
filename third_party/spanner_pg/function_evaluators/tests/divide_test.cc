@@ -33,7 +33,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "third_party/spanner_pg/datatypes/common/numeric_core.h"
@@ -50,8 +50,8 @@ using ::postgres_translator::spangres::datatypes::common::
     kPGNumericPositiveInfinity;
 using ::postgres_translator::spangres::datatypes::common::MaxNumericString;
 using ::postgres_translator::spangres::datatypes::common::MinNumericString;
-using ::zetasql_base::testing::IsOkAndHolds;
-using ::zetasql_base::testing::StatusIs;
+using ::googlesql_base::testing::IsOkAndHolds;
+using ::googlesql_base::testing::StatusIs;
 
 class DivideTest : public PgEvaluatorTest {};
 
@@ -62,6 +62,13 @@ TEST_F(DivideTest, ReturnsDivisionOfGivenNumbers) {
   EXPECT_THAT(Divide("-123.45", "-2.5"), IsOkAndHolds("49.3800000000000000"));
   EXPECT_THAT(Divide("0", "2.0"), IsOkAndHolds("0.00000000000000000000"));
   EXPECT_THAT(Divide("0.000", "2.0"), IsOkAndHolds("0.00000000000000000000"));
+}
+
+TEST_F(DivideTest, HandlesCarryCascadeUnderflow) {
+  EXPECT_THAT(Divide("999999999999999999999999999", "1000000000"),
+              IsOkAndHolds("1000000000000000000"));
+  EXPECT_THAT(Divide("999999999999999999", "1000000000"),
+              IsOkAndHolds("1000000000.00000000"));
 }
 
 TEST_F(DivideTest, ReturnsNaNWhenAtLeastOneInputIsNaN) {

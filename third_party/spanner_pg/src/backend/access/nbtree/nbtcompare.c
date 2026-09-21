@@ -3,7 +3,7 @@
  * nbtcompare.c
  *	  Comparison functions for btree access method.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -298,6 +298,9 @@ btoidvectorcmp(PG_FUNCTION_ARGS)
 	oidvector  *a = (oidvector *) PG_GETARG_POINTER(0);
 	oidvector  *b = (oidvector *) PG_GETARG_POINTER(1);
 	int			i;
+
+	check_valid_oidvector(a);
+	check_valid_oidvector(b);
 
 	/* We arbitrarily choose to sort first by vector length */
 	if (a->dim1 != b->dim1)

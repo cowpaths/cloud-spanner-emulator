@@ -24,19 +24,20 @@
 
 #include "google/spanner/v1/result_set.pb.h"
 #include "google/spanner/v1/type.pb.h"
-#include "zetasql/public/json_value.h"
-#include "zetasql/public/value.h"
+#include "googlesql/public/json_value.h"
+#include "googlesql/public/value.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 #include "absl/time/time.h"
 #include "backend/access/read.h"
 #include "common/limits.h"
 #include "frontend/converters/change_streams.h"
 #include "frontend/converters/chunking.h"
 #include "frontend/converters/values.h"
+#include "googlesql/base/status_macros.h"
 #include "nlohmann/json.hpp"
-#include "zetasql/base/status_macros.h"
 
 namespace google {
 namespace spanner {
@@ -75,8 +76,8 @@ JSON CreateChildPartitionRecord(
   JSON child_partitions = JSON::array();
   do {
     JSON parent_partition_tokens = JSON::array();
-    zetasql::Value partition_token_val = cursor->ColumnValue(1);
-    zetasql::Value parent_tokens_arr = cursor->ColumnValue(2);
+    googlesql::Value partition_token_val = cursor->ColumnValue(1);
+    googlesql::Value parent_tokens_arr = cursor->ColumnValue(2);
     for (int i = 0; i < parent_tokens_arr.num_elements(); i++) {
       if (initial_start_timestamp.has_value()) break;
       parent_partition_tokens.push_back(
@@ -134,10 +135,10 @@ JSON CreateDataChangeRecord(backend::RowCursor* cursor) {
   //     "ordinal_position": 1
   //   },...]
   JSON column_types = JSON::array();
-  zetasql::Value column_types_name_arr = cursor->ColumnValue(6);
-  zetasql::Value column_types_type_arr = cursor->ColumnValue(7);
-  zetasql::Value column_types_is_primary_key = cursor->ColumnValue(8);
-  zetasql::Value column_types_ordinal_position = cursor->ColumnValue(9);
+  googlesql::Value column_types_name_arr = cursor->ColumnValue(6);
+  googlesql::Value column_types_type_arr = cursor->ColumnValue(7);
+  googlesql::Value column_types_is_primary_key = cursor->ColumnValue(8);
+  googlesql::Value column_types_ordinal_position = cursor->ColumnValue(9);
   for (int i = 0; i < column_types_name_arr.num_elements(); i++) {
     JSON column_type;
     column_type[kName] = column_types_name_arr.element(i).string_value();
@@ -161,9 +162,9 @@ JSON CreateDataChangeRecord(backend::RowCursor* cursor) {
   //   "old_values" : {}
   // }... ]
   JSON mods = JSON::array();
-  zetasql::Value mods_keys_arr = cursor->ColumnValue(10);
-  zetasql::Value mods_new_values_arr = cursor->ColumnValue(11);
-  zetasql::Value mods_old_values_arr = cursor->ColumnValue(12);
+  googlesql::Value mods_keys_arr = cursor->ColumnValue(10);
+  googlesql::Value mods_new_values_arr = cursor->ColumnValue(11);
+  googlesql::Value mods_old_values_arr = cursor->ColumnValue(12);
   for (int i = 0; i < mods_keys_arr.num_elements(); i++) {
     JSON mod;
     mod[kKeys] = JSON::parse(mods_keys_arr.element(i).string_value());
@@ -190,7 +191,7 @@ JSON CreateDataChangeRecord(backend::RowCursor* cursor) {
 }
 absl::Status PopulateMetadata(
     std::vector<spanner_api::PartialResultSet>* responses,
-    const std::string& tvf_name) {
+    absl::string_view tvf_name) {
   auto* result_metadata_pb = responses->at(0).mutable_metadata();
   auto* field_pb = result_metadata_pb->mutable_row_type()->add_fields();
   field_pb->set_name(tvf_name);
@@ -211,21 +212,21 @@ void PopulateFakeResumeTokens(
 
 absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
 ConvertHeartbeatTimestampToJson(absl::Time timestamp,
-                                const std::string& tvf_name,
+                                absl::string_view tvf_name,
                                 bool expect_metadata) {
   spanner_api::ResultSet result_pb;
   auto* row_pb = result_pb.add_rows();
   JSON change_record;
   change_record[kHeartbeatRecord] = CreateHeartbeatRecord(timestamp);
-  ZETASQL_ASSIGN_OR_RETURN(auto heartbeat_record_json_value,
-                   zetasql::JSONValue::ParseJSONString(change_record.dump()));
-  ZETASQL_ASSIGN_OR_RETURN(*row_pb->add_values(),
-                   ValueToProto(zetasql::Value::Json(
+  GOOGLESQL_ASSIGN_OR_RETURN(auto heartbeat_record_json_value,
+                   googlesql::JSONValue::ParseJSONString(change_record.dump()));
+  GOOGLESQL_ASSIGN_OR_RETURN(*row_pb->add_values(),
+                   ValueToProto(googlesql::Value::Json(
                        std::move(heartbeat_record_json_value))));
-  ZETASQL_ASSIGN_OR_RETURN(auto responses,
+  GOOGLESQL_ASSIGN_OR_RETURN(auto responses,
                    ChunkResultSet(result_pb, limits::kMaxStreamingChunkSize));
   if (expect_metadata) {
-    ZETASQL_RETURN_IF_ERROR(PopulateMetadata(&responses, tvf_name));
+    GOOGLESQL_RETURN_IF_ERROR(PopulateMetadata(&responses, tvf_name));
   } else {
     responses.at(0).clear_metadata();
   }
@@ -236,7 +237,7 @@ ConvertHeartbeatTimestampToJson(absl::Time timestamp,
 absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
 ConvertPartitionTableRowCursorToJson(
     backend::RowCursor* row_cursor,
-    std::optional<absl::Time> initial_start_time, const std::string& tvf_name,
+    std::optional<absl::Time> initial_start_time, absl::string_view tvf_name,
     bool expect_metadata) {
   spanner_api::ResultSet result_pb;
   int64_t record_sequence = 0;
@@ -245,18 +246,18 @@ ConvertPartitionTableRowCursorToJson(
     JSON change_record;
     change_record[kChildPartitionsRecord] = CreateChildPartitionRecord(
         row_cursor, record_sequence, initial_start_time);
-    ZETASQL_ASSIGN_OR_RETURN(
+    GOOGLESQL_ASSIGN_OR_RETURN(
         auto child_partitions_record_json_value,
-        zetasql::JSONValue::ParseJSONString(change_record.dump()));
-    ZETASQL_ASSIGN_OR_RETURN(*row_pb->add_values(),
-                     ValueToProto(zetasql::Value::Json(
+        googlesql::JSONValue::ParseJSONString(change_record.dump()));
+    GOOGLESQL_ASSIGN_OR_RETURN(*row_pb->add_values(),
+                     ValueToProto(googlesql::Value::Json(
                          std::move(child_partitions_record_json_value))));
     record_sequence++;
   }
-  ZETASQL_ASSIGN_OR_RETURN(auto responses,
+  GOOGLESQL_ASSIGN_OR_RETURN(auto responses,
                    ChunkResultSet(result_pb, limits::kMaxStreamingChunkSize));
   if (expect_metadata) {
-    ZETASQL_RETURN_IF_ERROR(PopulateMetadata(&responses, tvf_name));
+    GOOGLESQL_RETURN_IF_ERROR(PopulateMetadata(&responses, tvf_name));
   } else {
     responses.at(0).clear_metadata();
   }
@@ -266,28 +267,103 @@ ConvertPartitionTableRowCursorToJson(
 
 absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
 ConvertDataTableRowCursorToJson(backend::RowCursor* row_cursor,
-                                const std::string& tvf_name,
+                                absl::string_view tvf_name,
                                 bool expect_metadata) {
   spanner_api::ResultSet result_pb;
   while (row_cursor->Next()) {
     auto* row_pb = result_pb.add_rows();
     JSON change_record;
     change_record[kDataChangeRecord] = CreateDataChangeRecord(row_cursor);
-    ZETASQL_ASSIGN_OR_RETURN(
+    GOOGLESQL_ASSIGN_OR_RETURN(
         auto data_change_record_json_value,
-        zetasql::JSONValue::ParseJSONString(change_record.dump()));
-    ZETASQL_ASSIGN_OR_RETURN(*row_pb->add_values(),
-                     ValueToProto(zetasql::Value::Json(
+        googlesql::JSONValue::ParseJSONString(change_record.dump()));
+    GOOGLESQL_ASSIGN_OR_RETURN(*row_pb->add_values(),
+                     ValueToProto(googlesql::Value::Json(
                          std::move(data_change_record_json_value))));
   }
-  ZETASQL_ASSIGN_OR_RETURN(auto responses,
+  GOOGLESQL_ASSIGN_OR_RETURN(auto responses,
                    ChunkResultSet(result_pb, limits::kMaxStreamingChunkSize));
   if (expect_metadata) {
-    ZETASQL_RETURN_IF_ERROR(PopulateMetadata(&responses, tvf_name));
+    GOOGLESQL_RETURN_IF_ERROR(PopulateMetadata(&responses, tvf_name));
   } else {
     responses.at(0).clear_metadata();
   }
   PopulateFakeResumeTokens(&responses);
+  return responses;
+}
+
+absl::Status PatchMetadataToBytes(
+    std::vector<spanner_api::PartialResultSet>* responses,
+    absl::string_view tvf_name) {
+  auto* result_metadata_pb = responses->at(0).mutable_metadata();
+  result_metadata_pb->mutable_row_type()->clear_fields();
+  auto* field_pb = result_metadata_pb->mutable_row_type()->add_fields();
+  field_pb->set_name(tvf_name);
+  field_pb->mutable_type()->set_code(google::spanner::v1::TypeCode::BYTES);
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
+ConvertPartitionTableRowCursorToBytes(
+    backend::RowCursor* row_cursor,
+    std::optional<absl::Time> initial_start_time,
+    absl::string_view partition_token, absl::string_view tvf_name,
+    bool expect_metadata) {
+  GOOGLESQL_ASSIGN_OR_RETURN(auto responses, ConvertPartitionTableRowCursorToProto(
+                                       row_cursor, initial_start_time,
+                                       partition_token, expect_metadata));
+  if (expect_metadata) {
+    GOOGLESQL_RETURN_IF_ERROR(PatchMetadataToBytes(&responses, tvf_name));
+  } else {
+    responses.at(0).clear_metadata();
+  }
+  return responses;
+}
+
+absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
+ConvertQueryStartPartitionTableRowCursorToBytes(backend::RowCursor* row_cursor,
+                                                absl::Time query_start_time,
+                                                absl::string_view tvf_name,
+                                                bool expect_metadata) {
+  GOOGLESQL_ASSIGN_OR_RETURN(auto responses,
+                   ConvertQueryStartPartitionTableRowCursorToProto(
+                       row_cursor, query_start_time, expect_metadata));
+  if (responses.empty()) {
+    return responses;
+  }
+  if (expect_metadata) {
+    GOOGLESQL_RETURN_IF_ERROR(PatchMetadataToBytes(&responses, tvf_name));
+  } else {
+    responses.at(0).clear_metadata();
+  }
+  return responses;
+}
+
+absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
+ConvertHeartbeatTimestampToBytes(absl::Time timestamp,
+                                 absl::string_view tvf_name,
+                                 bool expect_metadata) {
+  GOOGLESQL_ASSIGN_OR_RETURN(auto responses, ConvertHeartbeatTimestampToProto(
+                                       timestamp, expect_metadata));
+  if (expect_metadata) {
+    GOOGLESQL_RETURN_IF_ERROR(PatchMetadataToBytes(&responses, tvf_name));
+  } else {
+    responses.at(0).clear_metadata();
+  }
+  return responses;
+}
+
+absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
+ConvertDataTableRowCursorToBytes(backend::RowCursor* row_cursor,
+                                 absl::string_view tvf_name,
+                                 bool expect_metadata) {
+  GOOGLESQL_ASSIGN_OR_RETURN(auto responses, ConvertDataTableRowCursorToProto(
+                                       row_cursor, expect_metadata));
+  if (expect_metadata) {
+    GOOGLESQL_RETURN_IF_ERROR(PatchMetadataToBytes(&responses, tvf_name));
+  } else {
+    responses.at(0).clear_metadata();
+  }
   return responses;
 }
 

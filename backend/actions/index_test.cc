@@ -21,12 +21,14 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/memory/memory.h"
+#include "absl/status/status.h"
 #include "absl/types/variant.h"
 #include "backend/actions/context.h"
 #include "backend/actions/ops.h"
+#include "backend/datamodel/key.h"
 #include "tests/common/actions.h"
 #include "tests/common/schema_constructor.h"
 #include "tests/common/scoped_feature_flags_setter.h"
@@ -38,10 +40,10 @@ namespace backend {
 namespace {
 
 using ::google::spanner::emulator::test::ScopedEmulatorFeatureFlagsSetter;
-using zetasql::types::StringType;
-using zetasql::values::Int64;
-using zetasql::values::Null;
-using zetasql::values::String;
+using googlesql::types::StringType;
+using googlesql::values::Int64;
+using googlesql::values::Null;
+using googlesql::values::String;
 
 class IndexTest : public test::ActionsTest {
  public:
@@ -70,7 +72,7 @@ class IndexTest : public test::ActionsTest {
 
  protected:
   // Test components.
-  zetasql::TypeFactory type_factory_;
+  googlesql::TypeFactory type_factory_;
   std::unique_ptr<const Schema> schema_;
 
   // Test variables.
@@ -83,14 +85,14 @@ class IndexTest : public test::ActionsTest {
 
 TEST_F(IndexTest, DeleteCascadesToIndexEntry) {
   // Add row in base table & index.
-  ZETASQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
+  GOOGLESQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
                             {Int64(1), String("value"), String("value2")}));
-  ZETASQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
+  GOOGLESQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
                             Key({String("value"), Int64(1)}), index_columns_,
                             {Int64(1), String("value"), String("value2")}));
 
   // Delete base table entry.
-  ZETASQL_EXPECT_OK(effector_->Effect(ctx(), Delete(table_, Key({Int64(1)}))));
+  GOOGLESQL_EXPECT_OK(effector_->Effect(ctx(), Delete(table_, Key({Int64(1)}))));
   // Verify index delete is added to the transaction buffer.
   ASSERT_EQ(effects_buffer()->ops_queue()->size(), 1);
   EXPECT_THAT(
@@ -101,7 +103,7 @@ TEST_F(IndexTest, DeleteCascadesToIndexEntry) {
 
 TEST_F(IndexTest, InsertCascadesToIndexEntry) {
   // Insert base table entry.
-  ZETASQL_EXPECT_OK(effector_->Effect(
+  GOOGLESQL_EXPECT_OK(effector_->Effect(
       ctx(), Insert(table_, Key({Int64(1)}), base_columns_,
                     {Int64(1), String("value"), String("value2")})));
 
@@ -117,7 +119,7 @@ TEST_F(IndexTest, InsertCascadesToIndexEntry) {
 
 TEST_F(IndexTest, InsertNullDoesNotCascadeToIndexEntry) {
   // Insert base table entry.
-  ZETASQL_EXPECT_OK(effector_->Effect(
+  GOOGLESQL_EXPECT_OK(effector_->Effect(
       ctx(), Insert(table_, Key({Int64(1)}), {table_->FindColumn("int64_col")},
                     {Int64(1)})));
 
@@ -128,11 +130,11 @@ TEST_F(IndexTest, InsertNullDoesNotCascadeToIndexEntry) {
 TEST_F(IndexTest, UpdateColumnOnlyInsertsNewEntry) {
   // Add row in base table. This is NULL_FILTERED from the index since
   // string_col is NULL value.
-  ZETASQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
+  GOOGLESQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
                             {Int64(1), Null(StringType()), String("value2")}));
 
   // Update base table entry.
-  ZETASQL_EXPECT_OK(effector_->Effect(
+  GOOGLESQL_EXPECT_OK(effector_->Effect(
       ctx(), Update(table_, Key({Int64(1)}), {table_->FindColumn("string_col")},
                     {String("new-value")})));
 
@@ -148,14 +150,14 @@ TEST_F(IndexTest, UpdateColumnOnlyInsertsNewEntry) {
 
 TEST_F(IndexTest, UpdateColumnOnlyDeletesOldEntry) {
   // Add row in base table and index.
-  ZETASQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
+  GOOGLESQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
                             {Int64(1), String("value"), String("value2")}));
-  ZETASQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
+  GOOGLESQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
                             Key({String("value"), Int64(1)}), index_columns_,
                             {Int64(1), String("value"), String("value2")}));
 
   // Update base table entry.
-  ZETASQL_EXPECT_OK(effector_->Effect(
+  GOOGLESQL_EXPECT_OK(effector_->Effect(
       ctx(), Update(table_, Key({Int64(1)}), {table_->FindColumn("string_col")},
                     {Null(StringType())})));
 
@@ -170,14 +172,14 @@ TEST_F(IndexTest, UpdateColumnOnlyDeletesOldEntry) {
 
 TEST_F(IndexTest, UpdateCascadesToIndexEntry) {
   // Add row in base table & index.
-  ZETASQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
+  GOOGLESQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
                             {Int64(1), String("value"), String("value2")}));
-  ZETASQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
+  GOOGLESQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
                             Key({String("value"), Int64(1)}), index_columns_,
                             {Int64(1), String("value"), String("value2")}));
 
   // Update base table entry.
-  ZETASQL_EXPECT_OK(effector_->Effect(
+  GOOGLESQL_EXPECT_OK(effector_->Effect(
       ctx(), Update(table_, Key({Int64(1)}), {table_->FindColumn("string_col")},
                     {String("new-value")})));
 
@@ -234,7 +236,7 @@ class RemoteIndexTest : public test::ActionsTest {
 
  protected:
   // Test components.
-  zetasql::TypeFactory type_factory_;
+  googlesql::TypeFactory type_factory_;
   const ScopedEmulatorFeatureFlagsSetter flag_setter_;
   std::unique_ptr<const Schema> schema_;
 
@@ -250,15 +252,15 @@ class RemoteIndexTest : public test::ActionsTest {
 
 TEST_F(RemoteIndexTest, BaseTableDeleteCascadesToIndexEntry) {
   // Add row in base table & index.
-  ZETASQL_EXPECT_OK(store()->Insert(parent_table_, Key({String("value")}),
+  GOOGLESQL_EXPECT_OK(store()->Insert(parent_table_, Key({String("value")}),
                             parent_columns_, {String("value"), Int64(11)}));
-  ZETASQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
+  GOOGLESQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
                             {Int64(1), String("value"), String("value2")}));
-  ZETASQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
+  GOOGLESQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
                             Key({String("value"), Int64(1)}), index_columns_,
                             {Int64(1), String("value"), String("value2")}));
   // Delete base table entry.
-  ZETASQL_EXPECT_OK(effector_->Effect(ctx(), Delete(table_, Key({Int64(1)}))));
+  GOOGLESQL_EXPECT_OK(effector_->Effect(ctx(), Delete(table_, Key({Int64(1)}))));
   // Verify index delete is added to the transaction buffer.
   ASSERT_EQ(effects_buffer()->ops_queue()->size(), 1);
   EXPECT_THAT(
@@ -269,11 +271,11 @@ TEST_F(RemoteIndexTest, BaseTableDeleteCascadesToIndexEntry) {
 
 TEST_F(RemoteIndexTest, BaseTableInsertCascadesToIndexEntry) {
   // Add row in parent table.
-  ZETASQL_EXPECT_OK(store()->Insert(parent_table_, Key({String("value")}),
+  GOOGLESQL_EXPECT_OK(store()->Insert(parent_table_, Key({String("value")}),
                             parent_columns_, {String("value"), Int64(11)}));
 
   // Insert base table entry.
-  ZETASQL_EXPECT_OK(effector_->Effect(
+  GOOGLESQL_EXPECT_OK(effector_->Effect(
       ctx(), Insert(table_, Key({Int64(1)}), base_columns_,
                     {Int64(1), String("value"), String("value2")})));
 
@@ -289,7 +291,7 @@ TEST_F(RemoteIndexTest, BaseTableInsertCascadesToIndexEntry) {
 
 TEST_F(RemoteIndexTest, BaseTableInsertCascadeToIndexEntryWithoutParentRow) {
   // Insert base table entry.
-  ZETASQL_EXPECT_OK(effector_->Effect(
+  GOOGLESQL_EXPECT_OK(effector_->Effect(
       ctx(), Insert(table_, Key({Int64(1)}), base_columns_,
                     {Int64(1), String("value"), String("value2")})));
 
@@ -305,17 +307,17 @@ TEST_F(RemoteIndexTest, BaseTableInsertCascadeToIndexEntryWithoutParentRow) {
 
 TEST_F(RemoteIndexTest, BaseTableUpdateCascadesToIndexEntry) {
   // Add row in parent table.
-  ZETASQL_EXPECT_OK(store()->Insert(parent_table_, Key({String("value")}),
+  GOOGLESQL_EXPECT_OK(store()->Insert(parent_table_, Key({String("value")}),
                             parent_columns_, {String("value"), Int64(11)}));
   // Add row in base table & index.
-  ZETASQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
+  GOOGLESQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
                             {Int64(1), String("value"), String("value2")}));
-  ZETASQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
+  GOOGLESQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
                             Key({String("value"), Int64(1)}), index_columns_,
                             {Int64(1), String("value"), String("value2")}));
 
   // Update base table entry.
-  ZETASQL_EXPECT_OK(effector_->Effect(
+  GOOGLESQL_EXPECT_OK(effector_->Effect(
       ctx(), Update(table_, Key({Int64(1)}), {table_->FindColumn("string_col")},
                     {String("new-value")})));
 
@@ -336,19 +338,55 @@ TEST_F(RemoteIndexTest, BaseTableUpdateCascadesToIndexEntry) {
                            {String("new-value"), Int64(1), String("value2")}}));
 }
 
+TEST_F(IndexTest, CannotDeleteWithPendingCommitTimestampOnIndexKey) {
+  // Add row in base table & index.
+  GOOGLESQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
+                            {Int64(1), String("value"), String("value2")}));
+  GOOGLESQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
+                            Key({String("value"), Int64(1)}), index_columns_,
+                            {Int64(1), String("value"), String("value2")}));
+
+  // Mark string_col as having pending commit timestamp.
+  store()->SetHasPendingCommitTimestamp(table_->FindColumn("string_col"));
+
+  EXPECT_THAT(
+      effector_->Effect(ctx(), Delete(table_, Key({Int64(1)}))),
+      googlesql_base::testing::StatusIs(absl::StatusCode::kInvalidArgument,
+                                testing::HasSubstr("Column string_col")));
+}
+
+TEST_F(IndexTest, CannotUpdateWithPendingCommitTimestampOnIndexKey) {
+  // Add row in base table & index.
+  GOOGLESQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
+                            {Int64(1), String("value"), String("value2")}));
+  GOOGLESQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
+                            Key({String("value"), Int64(1)}), index_columns_,
+                            {Int64(1), String("value"), String("value2")}));
+
+  // Mark string_col as having pending commit timestamp.
+  store()->SetHasPendingCommitTimestamp(table_->FindColumn("string_col"));
+
+  EXPECT_THAT(
+      effector_->Effect(ctx(), Update(table_, Key({Int64(1)}),
+                                      {table_->FindColumn("string_col")},
+                                      {String("new-value")})),
+      googlesql_base::testing::StatusIs(absl::StatusCode::kInvalidArgument,
+                                testing::HasSubstr("Column string_col")));
+}
+
 TEST_F(RemoteIndexTest, CanDeleteParentRowIfIndexEntryExists) {
   // Add row in parent table.
-  ZETASQL_EXPECT_OK(store()->Insert(parent_table_, Key({String("value")}),
+  GOOGLESQL_EXPECT_OK(store()->Insert(parent_table_, Key({String("value")}),
                             parent_columns_, {String("value"), Int64(11)}));
   // Add row in base table and index.
-  ZETASQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
+  GOOGLESQL_EXPECT_OK(store()->Insert(table_, Key({Int64(1)}), base_columns_,
                             {Int64(1), String("value"), String("value2")}));
-  ZETASQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
+  GOOGLESQL_EXPECT_OK(store()->Insert(index_->index_data_table(),
                             Key({String("value"), Int64(1)}), index_columns_,
                             {Int64(1), String("value"), String("value2")}));
 
   // Delete parent table entry.
-  ZETASQL_EXPECT_OK(store()->Delete(parent_table_, Key({String("value")})));
+  GOOGLESQL_EXPECT_OK(store()->Delete(parent_table_, Key({String("value")})));
 
   // Verify the delete is not cascaded to the index.
   ASSERT_EQ(effects_buffer()->ops_queue()->size(), 0);

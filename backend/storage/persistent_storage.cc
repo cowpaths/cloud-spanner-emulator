@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-#include "zetasql/public/value.h"
+#include "googlesql/public/value.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/time/time.h"
@@ -65,7 +65,7 @@ std::unique_ptr<PersistentStorage> PersistentStorage::Wrap(
 absl::Status PersistentStorage::Lookup(
     absl::Time timestamp, const TableID& table_id, const Key& key,
     const std::vector<ColumnID>& column_ids,
-    std::vector<zetasql::Value>* values) const {
+    std::vector<googlesql::Value>* values) const {
   return inner_->Lookup(timestamp, table_id, key, column_ids, values);
 }
 
@@ -79,7 +79,7 @@ absl::Status PersistentStorage::Read(
 absl::Status PersistentStorage::Write(
     absl::Time timestamp, const TableID& table_id, const Key& key,
     const std::vector<ColumnID>& column_ids,
-    const std::vector<zetasql::Value>& values) {
+    const std::vector<googlesql::Value>& values) {
   // Build the WAL record.
   WalRecord wal_record;
   WalEntry* entry = wal_record.mutable_entry();

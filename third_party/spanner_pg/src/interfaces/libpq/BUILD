@@ -46,7 +46,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 filegroup(
     name = "client_include_files",
@@ -88,6 +88,7 @@ cc_library(
         "fe-protocol3.c",
         "fe-secure.c",
         "fe-trace.c",
+        "legacy-pqsignal.c",
         "libpq-events.c",
         "libpq-events.h",
         "libpq-int.h",
@@ -134,7 +135,9 @@ cc_binary(
         "-fexceptions",
     ],
     linkopts = select({
-        "@bazel_tools//src/conditions:darwin": [],
+        "@bazel_tools//src/conditions:darwin": [
+            "-Wl,-undefined,dynamic_lookup",
+        ],
         "//conditions:default": [
             "-Wl,--version-script",
             "$(location :exports.ld)",

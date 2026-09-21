@@ -101,6 +101,11 @@ class ChangeStream::Builder {
     return *this;
   }
 
+  Builder& set_partition_mode(std::optional<std::string> partition_mode) {
+    instance_->partition_mode_ = partition_mode;
+    return *this;
+  }
+
   Builder& set_for_clause(const ddl::ChangeStreamForClause& for_clause) {
     instance_->for_clause_ = for_clause;
     return *this;
@@ -178,6 +183,11 @@ class ChangeStream::Editor {
     return *this;
   }
 
+  Editor& set_partition_mode(std::optional<std::string> partition_mode) {
+    instance_->partition_mode_ = partition_mode;
+    return *this;
+  }
+
   Editor& set_for_clause(const ddl::ChangeStreamForClause& for_clause) {
     instance_->for_clause_ = for_clause;
     return *this;
@@ -198,6 +208,8 @@ class ChangeStream::Editor {
       instance_->exclude_delete_ = value_opt;
     } else if (option_name == ddl::kChangeStreamExcludeTtlDeletesOptionName) {
       instance_->exclude_ttl_deletes_ = value_opt;
+    } else if (option_name == ddl::kChangeStreamAllowTxnExclusionOptionName) {
+      instance_->allow_txn_exclusion_ = value_opt;
     }
     return *this;
   }

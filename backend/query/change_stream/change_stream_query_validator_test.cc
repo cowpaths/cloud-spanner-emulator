@@ -21,16 +21,16 @@
 #include <utility>
 #include <vector>
 
-#include "zetasql/public/analyzer.h"
-#include "zetasql/public/analyzer_options.h"
-#include "zetasql/public/catalog.h"
-#include "zetasql/public/function_signature.h"
-#include "zetasql/public/table_valued_function.h"
-#include "zetasql/public/types/type_factory.h"
-#include "zetasql/public/value.h"
+#include "googlesql/public/analyzer.h"
+#include "googlesql/public/analyzer_options.h"
+#include "googlesql/public/catalog.h"
+#include "googlesql/public/function_signature.h"
+#include "googlesql/public/table_valued_function.h"
+#include "googlesql/public/types/type_factory.h"
+#include "googlesql/public/value.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_split.h"
@@ -41,40 +41,42 @@
 #include "backend/query/analyzer_options.h"
 #include "backend/query/catalog.h"
 #include "backend/query/function_catalog.h"
+#include "backend/schema/catalog/change_stream.h"
 #include "backend/schema/catalog/schema.h"
 #include "common/constants.h"
 #include "common/errors.h"
 #include "common/limits.h"
 #include "tests/common/schema_constructor.h"
+#include "tests/common/scoped_feature_flags_setter.h"
 
 namespace google {
 namespace spanner {
 namespace emulator {
 namespace backend {
 namespace {
-using zetasql_base::testing::IsOkAndHolds;
-using zetasql_base::testing::StatusIs;
-class OtherTvf : public zetasql::TableValuedFunction {
+using googlesql_base::testing::IsOkAndHolds;
+using googlesql_base::testing::StatusIs;
+class OtherTvf : public googlesql::TableValuedFunction {
  public:
   explicit OtherTvf(std::vector<std::string> function_name_path,
-                    const zetasql::FunctionSignature& signature,
-                    const zetasql::TVFRelation& result_schema)
-      : zetasql::TableValuedFunction(function_name_path, signature),
+                    const googlesql::FunctionSignature& signature,
+                    const googlesql::TVFRelation& result_schema)
+      : googlesql::TableValuedFunction(function_name_path, signature),
         result_schema_(result_schema) {}
   absl::Status Resolve(
-      const zetasql::AnalyzerOptions* analyzer_options,
-      const std::vector<zetasql::TVFInputArgumentType>& actual_arguments,
-      const zetasql::FunctionSignature& concrete_signature,
-      zetasql::Catalog* catalog, zetasql::TypeFactory* type_factory,
-      std::shared_ptr<zetasql::TVFSignature>* output_tvf_signature)
+      const googlesql::AnalyzerOptions* analyzer_options,
+      const std::vector<googlesql::TVFInputArgumentType>& actual_arguments,
+      const googlesql::FunctionSignature& concrete_signature,
+      googlesql::Catalog* catalog, googlesql::TypeFactory* type_factory,
+      std::shared_ptr<googlesql::TVFSignature>* output_tvf_signature)
       const final {
     output_tvf_signature->reset(
-        new zetasql::TVFSignature(actual_arguments, result_schema_));
+        new googlesql::TVFSignature(actual_arguments, result_schema_));
     return absl::OkStatus();
   }
 
  private:
-  const zetasql::TVFRelation result_schema_;
+  const googlesql::TVFRelation result_schema_;
 };
 }  // namespace
 
@@ -92,17 +94,17 @@ class ChangeStreamQueryValidatorTest : public testing::Test {
             schema_.get(), &fn_catalog_, &type_factory_, analyzer_options_)) {}
 
  protected:
-  std::unique_ptr<const zetasql::AnalyzerOutput> AnalyzeQuery(
+  std::unique_ptr<const googlesql::AnalyzerOutput> AnalyzeQuery(
       const std::string& sql) {
-    std::unique_ptr<const zetasql::AnalyzerOutput> output;
-    ZETASQL_EXPECT_OK(zetasql::AnalyzeStatement(
+    std::unique_ptr<const googlesql::AnalyzerOutput> output;
+    GOOGLESQL_EXPECT_OK(googlesql::AnalyzeStatement(
         sql, analyzer_options_, catalog_.get(), &type_factory_, &output));
     return output;
   }
 
-  zetasql::TypeFactory type_factory_;
+  googlesql::TypeFactory type_factory_;
 
-  const zetasql::AnalyzerOptions analyzer_options_;
+  const googlesql::AnalyzerOptions analyzer_options_;
 
   std::unique_ptr<const Schema> schema_;
 
@@ -110,18 +112,18 @@ class ChangeStreamQueryValidatorTest : public testing::Test {
 
   std::unique_ptr<Catalog> catalog_;
 
-  absl::flat_hash_map<std::string, zetasql::Value> params_;
+  absl::flat_hash_map<std::string, googlesql::Value> params_;
 };
 
 TEST_F(ChangeStreamQueryValidatorTest,
        ValidateNoneChangeStreamTvfWithSamePrefixIsFiltered) {
-  std::vector<zetasql::TVFSchemaColumn> output_columns;
+  std::vector<googlesql::TVFSchemaColumn> output_columns;
   output_columns.emplace_back("output", type_factory_.get_string());
-  std::vector<zetasql::FunctionArgumentType> args;
-  zetasql::TVFRelation result_schema(output_columns);
-  const auto result_type = zetasql::FunctionArgumentType::RelationWithSchema(
+  std::vector<googlesql::FunctionArgumentType> args;
+  googlesql::TVFRelation result_schema(output_columns);
+  const auto result_type = googlesql::FunctionArgumentType::RelationWithSchema(
       result_schema, /*extra_relation_input_columns_allowed=*/false);
-  const auto signature = zetasql::FunctionSignature(result_type, args,
+  const auto signature = googlesql::FunctionSignature(result_type, args,
                                                       /*context_ptr=*/nullptr);
 
   catalog_->tvfs_["READ_foo"] = std::make_unique<OtherTvf>(
@@ -138,13 +140,13 @@ TEST_F(ChangeStreamQueryValidatorTest,
 
 TEST_F(ChangeStreamQueryValidatorTest,
        ValidateNoneChangeStreamTvfWithDifferentPrefixIsFiltered) {
-  std::vector<zetasql::TVFSchemaColumn> output_columns;
+  std::vector<googlesql::TVFSchemaColumn> output_columns;
   output_columns.emplace_back("output", type_factory_.get_string());
-  std::vector<zetasql::FunctionArgumentType> args;
-  zetasql::TVFRelation result_schema(output_columns);
-  const auto result_type = zetasql::FunctionArgumentType::RelationWithSchema(
+  std::vector<googlesql::FunctionArgumentType> args;
+  googlesql::TVFRelation result_schema(output_columns);
+  const auto result_type = googlesql::FunctionArgumentType::RelationWithSchema(
       result_schema, /*extra_relation_input_columns_allowed=*/false);
-  const auto signature = zetasql::FunctionSignature(result_type, args,
+  const auto signature = googlesql::FunctionSignature(result_type, args,
                                                       /*context_ptr=*/nullptr);
 
   catalog_->tvfs_["some_tvf"] = std::make_unique<OtherTvf>(
@@ -172,7 +174,7 @@ TEST_F(ChangeStreamQueryValidatorTest, ValidateArgumentLiteralsValid) {
   };
   ASSERT_TRUE(
       validator.IsChangeStreamQuery(stmt->resolved_statement()).value());
-  ZETASQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
+  GOOGLESQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
 }
 
 TEST_F(ChangeStreamQueryValidatorTest, ValidateArgumentParametersValid) {
@@ -180,11 +182,11 @@ TEST_F(ChangeStreamQueryValidatorTest, ValidateArgumentParametersValid) {
       "SELECT * FROM "
       "READ_change_stream_test_table (@startTimestamp, "
       "@endTimestamp, @partitionToken, @heartbeatMillisecond )");
-  params_.insert({"heartbeatMillisecond", zetasql::Value::Int64(1000)});
-  params_.insert({"partitionToken", zetasql::Value::String("test_token")});
+  params_.insert({"heartbeatMillisecond", googlesql::Value::Int64(1000)});
+  params_.insert({"partitionToken", googlesql::Value::String("test_token")});
   params_.insert({"endTimestamp",
-                  zetasql::Value::Timestamp(absl::Now() + absl::Minutes(1))});
-  params_.insert({"startTimestamp", zetasql::Value::Timestamp(absl::Now())});
+                  googlesql::Value::Timestamp(absl::Now() + absl::Minutes(1))});
+  params_.insert({"startTimestamp", googlesql::Value::Timestamp(absl::Now())});
   ChangeStreamQueryValidator validator{
       schema_.get(),
       absl::Now(),
@@ -192,7 +194,7 @@ TEST_F(ChangeStreamQueryValidatorTest, ValidateArgumentParametersValid) {
   };
   ASSERT_TRUE(
       validator.IsChangeStreamQuery(stmt->resolved_statement()).value());
-  ZETASQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
+  GOOGLESQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
 }
 
 TEST_F(ChangeStreamQueryValidatorTest,
@@ -208,7 +210,7 @@ TEST_F(ChangeStreamQueryValidatorTest,
                                        std::move(params_)};
   ASSERT_TRUE(
       validator.IsChangeStreamQuery(stmt->resolved_statement()).value());
-  ZETASQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
+  GOOGLESQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
   EXPECT_EQ(validator.change_stream_metadata().change_stream_name,
             "change_stream_test_table");
   EXPECT_EQ(validator.change_stream_metadata().heartbeat_milliseconds, 1000);
@@ -222,6 +224,8 @@ TEST_F(ChangeStreamQueryValidatorTest,
             "_change_stream_partition_change_stream_test_table");
   EXPECT_EQ(validator.change_stream_metadata().data_table,
             "_change_stream_data_change_stream_test_table");
+  EXPECT_EQ(validator.change_stream_metadata().partition_mode,
+            kChangeStreamPartitionModeImmutableKeyRange);
   ASSERT_FALSE(validator.change_stream_metadata().is_pg);
   ASSERT_TRUE(validator.change_stream_metadata().is_change_stream_query);
 }
@@ -410,6 +414,128 @@ TEST_F(ChangeStreamQueryValidatorTest, ValidateScalarArgumentNonValid) {
   EXPECT_EQ(stmt->resolved_statement()->Accept(&validator),
             error::InvalidChangeStreamTvfArgumentWithArgIndex(
                 "READ_change_stream_test_table", 2));
+}
+
+class ChangeStreamMutableKeyRangeQueryValidatorTest : public testing::Test {
+ public:
+  friend class Catalog;
+  ChangeStreamMutableKeyRangeQueryValidatorTest()
+      : flag_setter_({.enable_mutable_key_range_change_stream = true}),
+        analyzer_options_(MakeGoogleSqlAnalyzerOptions(kDefaultTimeZone)),
+        schema_(test::CreateSchemaWithOneTableAndOneChangeStream(
+            &type_factory_, database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+            /*is_mutable_key_range=*/true)),
+        fn_catalog_(&type_factory_,
+                    /*catalog_name=*/kCloudSpannerEmulatorFunctionCatalogName,
+                    /*latest_schema=*/schema_.get()),
+        catalog_(std::make_unique<Catalog>(
+            schema_.get(), &fn_catalog_, &type_factory_, analyzer_options_)) {}
+
+ protected:
+  std::unique_ptr<const googlesql::AnalyzerOutput> AnalyzeQuery(
+      const std::string& sql) {
+    std::unique_ptr<const googlesql::AnalyzerOutput> output;
+    GOOGLESQL_EXPECT_OK(googlesql::AnalyzeStatement(
+        sql, analyzer_options_, catalog_.get(), &type_factory_, &output));
+    return output;
+  }
+
+  test::ScopedEmulatorFeatureFlagsSetter flag_setter_;
+  googlesql::TypeFactory type_factory_;
+  const googlesql::AnalyzerOptions analyzer_options_;
+  std::unique_ptr<const Schema> schema_;
+  const FunctionCatalog fn_catalog_;
+  std::unique_ptr<Catalog> catalog_;
+  absl::flat_hash_map<std::string, googlesql::Value> params_;
+};
+
+TEST_F(ChangeStreamMutableKeyRangeQueryValidatorTest,
+       ValidateMetadataCreatedForValidChangeStreamQuery) {
+  absl::Time start_time = absl::Now();
+  absl::Time end_time = start_time + absl::Minutes(1);
+  auto stmt =
+      AnalyzeQuery(absl::Substitute("SELECT * FROM "
+                                    "READ_change_stream_test_table ('$0', "
+                                    "'$1', 'test_token', 1000 )",
+                                    start_time, end_time));
+  ChangeStreamQueryValidator validator{schema_.get(), absl::Now(),
+                                       std::move(params_)};
+  ASSERT_THAT(validator.IsChangeStreamQuery(stmt->resolved_statement()),
+              IsOkAndHolds(true));
+  GOOGLESQL_ASSERT_OK(stmt->resolved_statement()->Accept(&validator));
+  EXPECT_EQ(validator.change_stream_metadata().change_stream_name,
+            "change_stream_test_table");
+  EXPECT_EQ(validator.change_stream_metadata().heartbeat_milliseconds, 1000);
+  EXPECT_EQ(validator.change_stream_metadata().partition_token.value(),
+            "test_token");
+  EXPECT_EQ(validator.change_stream_metadata().end_timestamp.value(), end_time);
+  EXPECT_EQ(validator.change_stream_metadata().start_timestamp, start_time);
+  EXPECT_EQ(validator.change_stream_metadata().tvf_name,
+            "READ_change_stream_test_table");
+  EXPECT_EQ(validator.change_stream_metadata().partition_table,
+            "_change_stream_partition_change_stream_test_table");
+  EXPECT_EQ(validator.change_stream_metadata().data_table,
+            "_change_stream_data_change_stream_test_table");
+  EXPECT_EQ(validator.change_stream_metadata().partition_mode,
+            kChangeStreamPartitionModeMutableKeyRange);
+  ASSERT_FALSE(validator.change_stream_metadata().is_pg);
+  ASSERT_TRUE(validator.change_stream_metadata().is_change_stream_query);
+}
+
+TEST_F(ChangeStreamMutableKeyRangeQueryValidatorTest,
+       ValidateInvalidChangeStreamTvfName) {
+  absl::Time start_time = absl::Now();
+  absl::Time end_time = start_time + absl::Minutes(1);
+  std::unique_ptr<const googlesql::AnalyzerOutput> output;
+  EXPECT_FALSE(googlesql::AnalyzeStatement(
+                   absl::Substitute("SELECT * FROM "
+                                    "READ_non_existent_stream ('$0', "
+                                    "'$1', 'test_token', 1000 )",
+                                    start_time, end_time),
+                   analyzer_options_, catalog_.get(), &type_factory_, &output)
+                   .ok());
+}
+
+TEST_F(ChangeStreamMutableKeyRangeQueryValidatorTest,
+       ValidateEmptyEndTimestampNonValid) {
+  auto stmt =
+      AnalyzeQuery(absl::Substitute("SELECT * FROM "
+                                    "READ_change_stream_test_table ('$0', "
+                                    "NULL, 'test_token', 1000 )",
+                                    absl::Now()));
+  ChangeStreamQueryValidator validator{
+      schema_.get(),
+      absl::Now(),
+      params_,
+  };
+  ASSERT_THAT(validator.IsChangeStreamQuery(stmt->resolved_statement()),
+              IsOkAndHolds(true));
+  EXPECT_EQ(stmt->resolved_statement()->Accept(&validator),
+            error::InvalidChangeStreamTvfArgumentNullEndTimestamp());
+}
+
+TEST_F(ChangeStreamMutableKeyRangeQueryValidatorTest,
+       ValidateEndTimestampTooFarInFutureNonValid) {
+  absl::Time query_start_time = absl::Now();
+  absl::Time start_time = query_start_time;
+  absl::Time end_time = query_start_time + absl::Minutes(31);
+  auto stmt =
+      AnalyzeQuery(absl::Substitute("SELECT * FROM "
+                                    "READ_change_stream_test_table ('$0', "
+                                    "'$1', 'test_token', 1000 )",
+                                    start_time, end_time));
+  ChangeStreamQueryValidator validator{
+      schema_.get(),
+      query_start_time,
+      params_,
+  };
+  ASSERT_THAT(validator.IsChangeStreamQuery(stmt->resolved_statement()),
+              IsOkAndHolds(true));
+  EXPECT_THAT(
+      stmt->resolved_statement()->Accept(&validator),
+      StatusIs(absl::StatusCode::kOutOfRange,
+               testing::HasSubstr(
+                   "Specified end_timestamp is too far in the future.")));
 }
 
 class ChangeStreamQueryValidatorIllegalTVFTest

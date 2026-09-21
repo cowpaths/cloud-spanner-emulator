@@ -24,9 +24,9 @@ options {
   USER_CHAR_STREAM = true;
   NODE_EXTENDS = "QueryNodeBase";
   NAMESPACE = "google::spanner::emulator::backend::query::search";
-  TOKEN_INCLUDES =
+  TOKEN_INCLUDE =
     "backend/query/search/query_char_stream.h";
-  TOKEN_EXTENDS = "QueryTokenBase";
+  TOKEN_SUPER_CLASS = "QueryTokenBase";
   COMMON_TOKEN_ACTION = true;
   DEBUG_PARSER = false;
 }
@@ -60,8 +60,8 @@ SimpleNode* GetParseResult() {
   return dynamic_cast<SimpleNode*>(result);
 }
 
-SimpleNode* ParseSearchQuery() {
-  search_query();
+SimpleNode* ParseRQuery() {
+  rquery();
   return GetParseResult();
 }
 

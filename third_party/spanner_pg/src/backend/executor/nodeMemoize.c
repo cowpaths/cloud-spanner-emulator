@@ -3,7 +3,7 @@
  * nodeMemoize.c
  *	  Routines to handle caching of results from parameterized nodes
  *
- * Portions Copyright (c) 2021-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2021-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -133,8 +133,8 @@ typedef struct MemoizeEntry
 static uint32 MemoizeHash_hash(struct memoize_hash *tb,
 							   const MemoizeKey *key);
 static bool MemoizeHash_equal(struct memoize_hash *tb,
-							  const MemoizeKey *params1,
-							  const MemoizeKey *params2);
+							  const MemoizeKey *key1,
+							  const MemoizeKey *key2);
 
 #define SH_PREFIX memoize
 #define SH_ELEMENT_TYPE MemoizeEntry
@@ -1109,7 +1109,7 @@ ExecEndMemoize(MemoizeState *node)
 		if (node->stats.mem_peak == 0)
 			node->stats.mem_peak = node->mem_used;
 
-		Assert(ParallelWorkerNumber <= node->shared_info->num_workers);
+		Assert(ParallelWorkerNumber < node->shared_info->num_workers);
 		si = &node->shared_info->sinstrument[ParallelWorkerNumber];
 		memcpy(si, &node->stats, sizeof(MemoizeInstrumentation));
 	}

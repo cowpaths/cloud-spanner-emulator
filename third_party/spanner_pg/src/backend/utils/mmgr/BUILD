@@ -46,11 +46,12 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_library(
     name = "mmgr",
     srcs = [
+        "alignedalloc.c",
         "aset.c",
         "dsa.c",
         "freepage.c",

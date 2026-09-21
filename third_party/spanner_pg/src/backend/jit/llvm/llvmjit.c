@@ -3,7 +3,7 @@
  * llvmjit.c
  *	  Core part of the LLVM JIT provider.
  *
- * Copyright (c) 2016-2022, PostgreSQL Global Development Group
+ * Copyright (c) 2016-2023, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/jit/llvm/llvmjit.c
@@ -604,7 +604,7 @@ llvm_function_reference(LLVMJitContext *context,
 	else if (basename != NULL)
 	{
 		/* internal function */
-		funcname = psprintf("%s", basename);
+		funcname = pstrdup(basename);
 	}
 	else
 	{
@@ -719,7 +719,11 @@ llvm_optimize_module(LLVMJitContext *context, LLVMModuleRef module)
 
 	if (context->base.flags & PGJIT_OPT3)
 		passes = "default<O3>";
+	else if (context->base.flags & PGJIT_INLINE)
+		/* if doing inlining, but no expensive optimization, add inline pass */
+		passes = "default<O0>,mem2reg,inline";
 	else
+		/* default<O0> includes always-inline pass */
 		passes = "default<O0>,mem2reg";
 
 	options = LLVMCreatePassBuilderOptions();
@@ -774,7 +778,7 @@ llvm_compile_module(LLVMJitContext *context)
 	{
 		char	   *filename;
 
-		filename = psprintf("%u.%zu.bc",
+		filename = psprintf("%d.%zu.bc",
 							MyProcPid,
 							context->module_generation);
 		LLVMWriteBitcodeToFile(context->module, filename);
@@ -793,7 +797,7 @@ llvm_compile_module(LLVMJitContext *context)
 	{
 		char	   *filename;
 
-		filename = psprintf("%u.%zu.optimized.bc",
+		filename = psprintf("%d.%zu.optimized.bc",
 							MyProcPid,
 							context->module_generation);
 		LLVMWriteBitcodeToFile(context->module, filename);
@@ -1261,7 +1265,7 @@ llvm_resolve_symbol(const char *symname, void *ctx)
 
 static LLVMErrorRef
 llvm_resolve_symbols(LLVMOrcDefinitionGeneratorRef GeneratorObj, void *Ctx,
-					 LLVMOrcLookupStateRef * LookupState, LLVMOrcLookupKind Kind,
+					 LLVMOrcLookupStateRef *LookupState, LLVMOrcLookupKind Kind,
 					 LLVMOrcJITDylibRef JD, LLVMOrcJITDylibLookupFlags JDLookupFlags,
 					 LLVMOrcCLookupSet LookupSet, size_t LookupSetSize)
 {
@@ -1317,13 +1321,17 @@ llvm_log_jit_error(void *ctx, LLVMErrorRef error)
 static LLVMOrcObjectLayerRef
 llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *Triple)
 {
-#ifdef USE_LLVM_BACKPORT_SECTION_MEMORY_MANAGER
+#if LLVM_VERSION_MAJOR >= 22
+	LLVMOrcObjectLayerRef objlayer =
+		LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManagerReserveAlloc(ES, true);
+#elif defined(USE_LLVM_BACKPORT_SECTION_MEMORY_MANAGER)
 	LLVMOrcObjectLayerRef objlayer =
 		LLVMOrcCreateRTDyldObjectLinkingLayerWithSafeSectionMemoryManager(ES);
 #else
 	LLVMOrcObjectLayerRef objlayer =
 		LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
 #endif
+
 
 #if defined(HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER) && HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER
 	if (jit_debugging_support)
@@ -1339,7 +1347,8 @@ llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *T
 	{
 		LLVMJITEventListenerRef l = LLVMCreatePerfJITEventListener();
 
-		LLVMOrcRTDyldObjectLinkingLayerRegisterJITEventListener(objlayer, l);
+		if (l)
+			LLVMOrcRTDyldObjectLinkingLayerRegisterJITEventListener(objlayer, l);
 	}
 #endif
 

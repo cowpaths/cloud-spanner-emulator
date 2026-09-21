@@ -18,10 +18,10 @@
 
 #include <string>
 
-#include "zetasql/public/type.h"
-#include "zetasql/public/type.pb.h"
-#include "zetasql/public/value.h"
-#include "zetasql/public/value.pb.h"
+#include "googlesql/public/type.h"
+#include "googlesql/public/type.pb.h"
+#include "googlesql/public/value.h"
+#include "googlesql/public/value.pb.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "backend/datamodel/key.h"
@@ -32,7 +32,7 @@ namespace spanner {
 namespace emulator {
 namespace backend {
 
-absl::StatusOr<PersistedValue> SerializeValue(const zetasql::Value& value) {
+absl::StatusOr<PersistedValue> SerializeValue(const googlesql::Value& value) {
   PersistedValue result;
 
   // An invalid (default-constructed) Value is represented as empty fields.
@@ -41,7 +41,7 @@ absl::StatusOr<PersistedValue> SerializeValue(const zetasql::Value& value) {
   }
 
   // Serialize the type to a self-contained TypeProto.
-  zetasql::TypeProto type_proto;
+  googlesql::TypeProto type_proto;
   absl::Status type_status =
       value.type()->SerializeToSelfContainedProto(&type_proto);
   if (!type_status.ok()) {
@@ -50,7 +50,7 @@ absl::StatusOr<PersistedValue> SerializeValue(const zetasql::Value& value) {
   result.set_type_proto(type_proto.SerializeAsString());
 
   // Serialize the value to a ValueProto.
-  zetasql::ValueProto value_proto;
+  googlesql::ValueProto value_proto;
   absl::Status value_status = value.Serialize(&value_proto);
   if (!value_status.ok()) {
     return value_status;
@@ -60,20 +60,20 @@ absl::StatusOr<PersistedValue> SerializeValue(const zetasql::Value& value) {
   return result;
 }
 
-absl::StatusOr<zetasql::Value> DeserializeValue(
-    const PersistedValue& proto, zetasql::TypeFactory* type_factory) {
+absl::StatusOr<googlesql::Value> DeserializeValue(
+    const PersistedValue& proto, googlesql::TypeFactory* type_factory) {
   // Empty fields represent an invalid (default-constructed) Value.
   if (proto.type_proto().empty() && proto.value_proto().empty()) {
-    return zetasql::Value();
+    return googlesql::Value();
   }
 
   // Deserialize the type.
-  zetasql::TypeProto type_proto;
+  googlesql::TypeProto type_proto;
   if (!type_proto.ParseFromString(proto.type_proto())) {
     return absl::InternalError("Failed to parse TypeProto from bytes");
   }
 
-  const zetasql::Type* type = nullptr;
+  const googlesql::Type* type = nullptr;
   absl::Status type_status =
       type_factory->DeserializeFromSelfContainedProto(
           type_proto, /*pool=*/nullptr, &type);
@@ -82,12 +82,12 @@ absl::StatusOr<zetasql::Value> DeserializeValue(
   }
 
   // Deserialize the value.
-  zetasql::ValueProto value_proto;
+  googlesql::ValueProto value_proto;
   if (!value_proto.ParseFromString(proto.value_proto())) {
     return absl::InternalError("Failed to parse ValueProto from bytes");
   }
 
-  return zetasql::Value::Deserialize(value_proto, type);
+  return googlesql::Value::Deserialize(value_proto, type);
 }
 
 PersistedKey SerializeKey(const Key& key) {
@@ -119,7 +119,7 @@ PersistedKey SerializeKey(const Key& key) {
 }
 
 absl::StatusOr<Key> DeserializeKey(const PersistedKey& proto,
-                                   zetasql::TypeFactory* type_factory) {
+                                   googlesql::TypeFactory* type_factory) {
   // Handle special key values.
   if (proto.is_infinity()) {
     return Key::Infinity();

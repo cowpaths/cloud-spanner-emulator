@@ -32,6 +32,7 @@
 #ifndef DATATYPES_COMMON_NUMERIC_CORE_H_
 #define DATATYPES_COMMON_NUMERIC_CORE_H_
 
+#include <limits>
 #include <string>
 
 #include "absl/status/status.h"
@@ -48,11 +49,17 @@ inline constexpr uint16_t kMaxPGNumericFractionalDigits = 16383;
 inline constexpr char kPGNumericPositiveInfinity[] = "Infinity";
 inline constexpr char kPGNumericNegativeInfinity[] = "-Infinity";
 inline constexpr char kPGNumericNaN[] = "NaN";
-// JSONB Numerics have to be parsed into a long double. Long double has a max
-// value of 1.1897..e+4932L and a minvalue of 3.362..e-4932. Since it is desired
-// to give the representable range in number of whole digits, 4932 is the max
-// number of whole digits that can be fully represented.
-inline constexpr uint32_t kMaxPGJSONBNumericWholeDigits = 4932;
+// JSONB Numerics have to be parsed into a long double, so the max number of
+// whole digits that can be fully represented is bounded by long double's
+// representable exponent range on the current platform. On x86_64 (80-bit
+// extended precision) that's ~4932 digits; on platforms where `long double`
+// is just an alias for `double` (e.g. AArch64/ARM64, including Apple
+// Silicon), it's the same as double's, ~308 digits. `max_exponent10` is the
+// largest N for which 10^N is representable, so the longest representable
+// digit string (e.g. `long double`'s own max value) has max_exponent10 + 1
+// digits.
+inline constexpr uint32_t kMaxPGJSONBNumericWholeDigits =
+    std::numeric_limits<long double>::max_exponent10 + 1;
 inline constexpr uint16_t kMaxPGJSONBNumericFractionalDigits =
     kMaxPGNumericFractionalDigits;
 
@@ -83,8 +90,14 @@ inline absl::string_view MinNumericString() {
 }
 
 inline absl::string_view MaxJsonbNumericString() {
+  // One fewer than kMaxPGJSONBNumericWholeDigits: that constant is sized to
+  // fit long double's own max value's digit count (e.g. DBL_MAX's 309
+  // digits on platforms where long double is double), but an all-9s string
+  // at that same digit count (10^N - 1) can exceed the true max value
+  // itself (whose leading digits aren't necessarily all 9s). An (N-1)-digit
+  // all-9s string is always safe: it's < 10^(N-1) <= the true max.
   static const std::string max_numeric =
-      absl::StrCat(std::string(kMaxPGJSONBNumericWholeDigits, '9'), ".",
+      absl::StrCat(std::string(kMaxPGJSONBNumericWholeDigits - 1, '9'), ".",
                    std::string(kMaxPGJSONBNumericFractionalDigits, '9'));
   return max_numeric;
 }

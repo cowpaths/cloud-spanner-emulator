@@ -22,7 +22,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "absl/time/clock.h"
@@ -31,7 +31,7 @@
 #include "backend/datamodel/key_range.h"
 #include "backend/storage/persistence.pb.h"
 #include "backend/storage/wal_writer.h"
-#include "zetasql/public/value.h"
+#include "googlesql/public/value.h"
 
 namespace google {
 namespace spanner {
@@ -39,8 +39,8 @@ namespace emulator {
 namespace backend {
 namespace {
 
-using zetasql::values::Int64;
-using zetasql::values::String;
+using googlesql::values::Int64;
+using googlesql::values::String;
 
 class PersistentStorageTest : public testing::Test {
  protected:
@@ -76,11 +76,11 @@ class PersistentStorageTest : public testing::Test {
 TEST_F(PersistentStorageTest, WriteAndReadBack) {
   absl::Time t0 = absl::Now();
 
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(1)}), {kColumnId},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(1)}), {kColumnId},
                              {String("value-1")}));
 
-  std::vector<zetasql::Value> values;
-  ZETASQL_EXPECT_OK(storage_->Lookup(t0, kTableId, Key({Int64(1)}), {kColumnId},
+  std::vector<googlesql::Value> values;
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(t0, kTableId, Key({Int64(1)}), {kColumnId},
                               &values));
   EXPECT_THAT(values, testing::ElementsAre(String("value-1")));
 }
@@ -88,15 +88,15 @@ TEST_F(PersistentStorageTest, WriteAndReadBack) {
 TEST_F(PersistentStorageTest, WriteCreatesWalRecords) {
   absl::Time t0 = absl::Now();
 
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(1)}), {kColumnId},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(1)}), {kColumnId},
                              {String("value-1")}));
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(2)}), {kColumnId},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(2)}), {kColumnId},
                              {String("value-2")}));
 
   // Flush the WAL writer.
-  ZETASQL_EXPECT_OK(wal_writer_->Sync());
+  GOOGLESQL_EXPECT_OK(wal_writer_->Sync());
 
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
   ASSERT_EQ(records.size(), 2);
 
   // Verify the first record is a write for key 1.
@@ -116,16 +116,16 @@ TEST_F(PersistentStorageTest, DeleteCreatesWalRecords) {
   absl::Time t0 = absl::Now();
 
   // Write some data first.
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(1)}), {kColumnId},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(1)}), {kColumnId},
                              {String("value-1")}));
 
   // Delete a range.
   KeyRange range = KeyRange::ClosedOpen(Key({Int64(0)}), Key({Int64(5)}));
-  ZETASQL_EXPECT_OK(storage_->Delete(t0, kTableId, range));
+  GOOGLESQL_EXPECT_OK(storage_->Delete(t0, kTableId, range));
 
-  ZETASQL_EXPECT_OK(wal_writer_->Sync());
+  GOOGLESQL_EXPECT_OK(wal_writer_->Sync());
 
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
   ASSERT_EQ(records.size(), 2);
 
   // First record is the write.
@@ -142,23 +142,23 @@ TEST_F(PersistentStorageTest, ReadsDoNotCreateWalRecords) {
   absl::Time t0 = absl::Now();
 
   // Write one record.
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(1)}), {kColumnId},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(1)}), {kColumnId},
                              {String("value-1")}));
 
   // Perform a Lookup (read).
-  std::vector<zetasql::Value> values;
-  ZETASQL_EXPECT_OK(storage_->Lookup(t0, kTableId, Key({Int64(1)}), {kColumnId},
+  std::vector<googlesql::Value> values;
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(t0, kTableId, Key({Int64(1)}), {kColumnId},
                               &values));
 
   // Perform a Read (range scan).
   std::unique_ptr<StorageIterator> itr;
   KeyRange range = KeyRange::ClosedOpen(Key({Int64(0)}), Key({Int64(5)}));
-  ZETASQL_EXPECT_OK(storage_->Read(t0, kTableId, range, {kColumnId}, &itr));
+  GOOGLESQL_EXPECT_OK(storage_->Read(t0, kTableId, range, {kColumnId}, &itr));
 
-  ZETASQL_EXPECT_OK(wal_writer_->Sync());
+  GOOGLESQL_EXPECT_OK(wal_writer_->Sync());
 
   // Only the one write should have produced a WAL record.
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
   EXPECT_EQ(records.size(), 1);
 }
 
@@ -166,30 +166,30 @@ TEST_F(PersistentStorageTest, MultipleWritesAndReads) {
   absl::Time t0 = absl::Now();
 
   // Write multiple rows.
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(1)}), {kColumnId},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(1)}), {kColumnId},
                              {String("alpha")}));
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(2)}), {kColumnId},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(2)}), {kColumnId},
                              {String("beta")}));
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(3)}), {kColumnId},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId, Key({Int64(3)}), {kColumnId},
                              {String("gamma")}));
 
   // Read them back individually.
-  std::vector<zetasql::Value> values;
-  ZETASQL_EXPECT_OK(storage_->Lookup(t0, kTableId, Key({Int64(1)}), {kColumnId},
+  std::vector<googlesql::Value> values;
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(t0, kTableId, Key({Int64(1)}), {kColumnId},
                               &values));
   EXPECT_THAT(values, testing::ElementsAre(String("alpha")));
 
-  ZETASQL_EXPECT_OK(storage_->Lookup(t0, kTableId, Key({Int64(2)}), {kColumnId},
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(t0, kTableId, Key({Int64(2)}), {kColumnId},
                               &values));
   EXPECT_THAT(values, testing::ElementsAre(String("beta")));
 
-  ZETASQL_EXPECT_OK(storage_->Lookup(t0, kTableId, Key({Int64(3)}), {kColumnId},
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(t0, kTableId, Key({Int64(3)}), {kColumnId},
                               &values));
   EXPECT_THAT(values, testing::ElementsAre(String("gamma")));
 
   // Verify 3 WAL records were created.
-  ZETASQL_EXPECT_OK(wal_writer_->Sync());
-  ZETASQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
+  GOOGLESQL_EXPECT_OK(wal_writer_->Sync());
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
   EXPECT_EQ(records.size(), 3);
 }
 

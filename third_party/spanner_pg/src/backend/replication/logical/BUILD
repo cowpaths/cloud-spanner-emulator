@@ -46,11 +46,12 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_library(
     name = "logical",
     srcs = [
+        "applyparallelworker.c",
         "decode.c",
         "launcher.c",
         "logical.c",

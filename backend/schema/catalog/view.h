@@ -23,7 +23,7 @@
 #include <string>
 #include <vector>
 
-#include "zetasql/public/type.h"
+#include "googlesql/public/type.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
@@ -51,15 +51,16 @@ class Index;
 class View : public SchemaNode {
  public:
   struct Column {
-    Column(const std::string& name, const zetasql::Type* type)
+    Column(const std::string& name, const googlesql::Type* type)
         : name(name), type(type) {}
     const std::string name;
-    const zetasql::Type* const type = nullptr;
+    const googlesql::Type* const type = nullptr;
   };
 
   enum SqlSecurity {
     UNSPECIFIED,
     INVOKER,
+    DEFINER,
   };
 
   // Returns the name of the view.
@@ -148,6 +149,8 @@ class View : public SchemaNode {
   // View definition body in the original dialect.
   std::optional<std::string> body_origin_;
 };
+
+std::string SqlSecurityToString(View::SqlSecurity security);
 
 }  // namespace backend
 }  // namespace emulator
