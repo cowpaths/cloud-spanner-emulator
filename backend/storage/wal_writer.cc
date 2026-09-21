@@ -231,8 +231,15 @@ std::string WalWriter::CurrentSegmentPath() const {
 absl::Status WalWriter::Append(const WalRecord& record) {
   absl::MutexLock lock(&mu_);
 
-  // Make a mutable copy so we can set the sequence number.
+  // Make a mutable copy so we can set the sequence number. The top-level
+  // field is the only ordering key WalMetadataChange records have (they
+  // carry no sequence number of their own), and it's what RestoreState
+  // sorts replay order by -- so it must be set for every record type, not
+  // just entries, or same-timestamp records (e.g. a CreateDatabase and a
+  // write to that database) sort as equal and can replay out of causal
+  // order under std::sort's lack of stability.
   WalRecord mutable_record = record;
+  mutable_record.set_sequence_number(next_sequence_number_);
   if (mutable_record.has_entry()) {
     mutable_record.mutable_entry()->set_sequence_number(
         next_sequence_number_);

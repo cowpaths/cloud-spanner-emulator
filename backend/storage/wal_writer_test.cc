@@ -116,6 +116,42 @@ TEST_F(WalWriterTest, ReadAllReturnsRecordsInOrder) {
   EXPECT_EQ(records[2].entry().sequence_number(), 2);
 }
 
+TEST_F(WalWriterTest, AppendSetsTopLevelSequenceNumberOnAllRecordTypes) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto writer, WalWriter::Create(test_dir_));
+
+  // Non-entry records (metadata/schema changes) carry no sequence number of
+  // their own -- RestoreState orders replay using WalRecord's top-level
+  // sequence_number, so Append must set it regardless of which oneof field
+  // is populated.
+  WalRecord metadata_record;
+  metadata_record.mutable_metadata_change()->set_delete_instance_uri(
+      "instance1");
+  GOOGLESQL_EXPECT_OK(writer->Append(metadata_record));
+
+  WalRecord schema_record;
+  schema_record.mutable_schema_change()->set_database_uri("db1");
+  GOOGLESQL_EXPECT_OK(writer->Append(schema_record));
+
+  GOOGLESQL_EXPECT_OK(writer->Append(MakeRecord("db1")));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
+  ASSERT_EQ(records.size(), 3);
+
+  EXPECT_EQ(records[0].sequence_number(), 0);
+  EXPECT_TRUE(records[0].has_metadata_change());
+
+  EXPECT_EQ(records[1].sequence_number(), 1);
+  EXPECT_TRUE(records[1].has_schema_change());
+
+  EXPECT_EQ(records[2].sequence_number(), 2);
+  EXPECT_TRUE(records[2].has_entry());
+
+  // Records must sort strictly by increasing top-level sequence number, as
+  // RestoreState relies on this for deterministic, causally-ordered replay.
+  EXPECT_LT(records[0].sequence_number(), records[1].sequence_number());
+  EXPECT_LT(records[1].sequence_number(), records[2].sequence_number());
+}
+
 TEST_F(WalWriterTest, CrcIntegrityCheckDetectsCorruption) {
   {
     GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto writer, WalWriter::Create(test_dir_));
