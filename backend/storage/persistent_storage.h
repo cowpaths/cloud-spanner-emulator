@@ -17,6 +17,7 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_PERSISTENT_STORAGE_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_PERSISTENT_STORAGE_H_
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -37,6 +38,8 @@ namespace google {
 namespace spanner {
 namespace emulator {
 namespace backend {
+
+class Schema;
 
 // PersistentStorage wraps InMemoryStorage with write-ahead logging.
 //
@@ -93,6 +96,13 @@ class PersistentStorage : public Storage {
   void MarkDroppedColumn(absl::Time timestamp, TableID dropped_table_id,
                          ColumnID dropped_column_id) override;
 
+  // Installs the accessor used to resolve table/column names for WAL
+  // entries written by Write()/Delete(). See Storage::SetSchemaAccessor.
+  void SetSchemaAccessor(
+      std::function<const Schema*()> schema_accessor) override {
+    schema_accessor_ = std::move(schema_accessor);
+  }
+
  private:
   PersistentStorage(const std::string& database_uri,
                     std::unique_ptr<InMemoryStorage> inner,
@@ -101,6 +111,7 @@ class PersistentStorage : public Storage {
   std::string database_uri_;
   std::unique_ptr<InMemoryStorage> inner_;
   std::shared_ptr<WalWriter> wal_writer_;
+  std::function<const Schema*()> schema_accessor_;
 };
 
 }  // namespace backend

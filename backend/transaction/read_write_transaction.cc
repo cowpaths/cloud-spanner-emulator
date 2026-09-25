@@ -605,7 +605,8 @@ absl::Status ReadWriteTransaction::Write(const Mutation& mutation) {
   });
 }
 
-absl::Status ReadWriteTransaction::Commit() {
+absl::Status ReadWriteTransaction::Commit(
+    std::optional<absl::Time> commit_timestamp_override) {
   return GuardedCall(OpType::kCommit, [&]() -> absl::Status {
     mu_.AssertHeld();
 
@@ -623,8 +624,14 @@ absl::Status ReadWriteTransaction::Commit() {
         std::unique_ptr<postgres_translator::interfaces::PGArena> arena,
         postgres_translator::spangres::MemoryContextPGArena::Init(nullptr));
 
-    // Pick a commit timestamp.
-    GOOGLESQL_ASSIGN_OR_RETURN(commit_timestamp_, lock_handle_->ReserveCommitTimestamp());
+    // Pick a commit timestamp. The lock manager still needs to record this
+    // transaction as the active committer (for its usual bookkeeping), even
+    // when the caller supplies an override timestamp to use instead of the
+    // reserved one.
+    GOOGLESQL_ASSIGN_OR_RETURN(absl::Time reserved_commit_timestamp,
+                     lock_handle_->ReserveCommitTimestamp());
+    commit_timestamp_ = commit_timestamp_override.value_or(
+        reserved_commit_timestamp);
 
     // Write the mutations to the base storage.
     absl::Status flush_status = FlushWriteOpsToStorage(

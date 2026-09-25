@@ -18,6 +18,7 @@
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_TRANSACTION_READ_WRITE_TRANSACTION_H_
 
 #include <memory>
+#include <optional>
 #include <queue>
 
 #include "absl/base/thread_annotations.h"
@@ -93,7 +94,15 @@ class ReadWriteTransaction : public RowReader, public RowWriter {
   absl::Status Write(const Mutation& mutation) override
       ABSL_LOCKS_EXCLUDED(mu_);
 
-  absl::Status Commit() ABSL_LOCKS_EXCLUDED(mu_);
+  // `commit_timestamp_override`, when set, is used as the commit timestamp
+  // in place of one reserved from the lock manager (which otherwise always
+  // picks the current wall-clock time). This exists solely for restoring
+  // historical row versions from a snapshot, so that they sort *older* than
+  // WAL entries replayed on top of them (which carry their own original,
+  // real commit timestamps) -- see SnapshotLoader::PopulateStorage. Live,
+  // user-facing transactions must never pass this.
+  absl::Status Commit(std::optional<absl::Time> commit_timestamp_override =
+                          std::nullopt) ABSL_LOCKS_EXCLUDED(mu_);
 
   absl::Status Rollback() ABSL_LOCKS_EXCLUDED(mu_);
 

@@ -29,10 +29,16 @@
 #include "googlesql/public/type.h"
 #include "googlesql/public/value.h"
 #include "googlesql/base/logging.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/time/time.h"
+#include "backend/common/ids.h"
 #include "backend/datamodel/key_range.h"
+#include "backend/schema/catalog/column.h"
+#include "backend/schema/catalog/schema.h"
+#include "backend/schema/catalog/table.h"
 #include "backend/schema/updater/schema_updater.h"
 #include "backend/storage/persistence.pb.h"
 #include "backend/storage/snapshot_loader.h"
@@ -65,6 +71,40 @@ absl::Status EnsureDirectoryExists(const std::string& path) {
   return absl::InternalError(
       absl::StrCat("Failed to create directory: ", path,
                     ", errno: ", strerror(errno)));
+}
+
+// Resolves `table_name` against `schema`'s current tables, returning the
+// table's current id. Used to reconcile a WAL entry's recorded name against
+// whatever id the table has now, since ids are reallocated whenever the
+// schema is replayed from DDL.
+absl::StatusOr<backend::TableID> ResolveTableIdByName(
+    const backend::Schema* schema, const std::string& table_name) {
+  const backend::Table* table = schema->FindTable(table_name);
+  if (table == nullptr) {
+    return absl::NotFoundError(absl::StrCat(
+        "Table \"", table_name,
+        "\" not found in restored schema during WAL replay"));
+  }
+  return table->id();
+}
+
+// Resolves `column_names` against `table`'s current columns, returning
+// their current ids, in the same order.
+absl::StatusOr<std::vector<backend::ColumnID>> ResolveColumnIdsByName(
+    const backend::Table* table,
+    const std::vector<std::string>& column_names) {
+  std::vector<backend::ColumnID> ids;
+  ids.reserve(column_names.size());
+  for (const auto& name : column_names) {
+    const backend::Column* col = table->FindColumn(name);
+    if (col == nullptr) {
+      return absl::NotFoundError(absl::StrCat(
+          "Column \"", name, "\" not found in table \"", table->Name(),
+          "\" during WAL replay"));
+    }
+    ids.push_back(col->id());
+  }
+  return ids;
 }
 
 }  // namespace
@@ -154,6 +194,7 @@ absl::Status PersistenceManager::RestoreState(ServerEnv* env) {
     int metadata_count = 0;
     int schema_count = 0;
     int entry_count = 0;
+    int legacy_wal_mutations = 0;
 
     for (const auto& record : records) {
       if (record.has_metadata_change()) {
@@ -173,12 +214,14 @@ absl::Status PersistenceManager::RestoreState(ServerEnv* env) {
         }
         ++schema_count;
       } else if (record.has_entry()) {
-        auto status = ReplayEntry(record.entry(), env);
-        if (!status.ok()) {
+        auto legacy_mutations_or = ReplayEntry(record.entry(), env);
+        if (!legacy_mutations_or.ok()) {
           ABSL_LOG(ERROR) << "Failed to replay WAL entry (seq="
-                          << record.sequence_number() << "): " << status;
-          return status;
+                          << record.sequence_number() << "): "
+                          << legacy_mutations_or.status();
+          return legacy_mutations_or.status();
         }
+        legacy_wal_mutations += *legacy_mutations_or;
         ++entry_count;
       }
     }
@@ -187,6 +230,14 @@ absl::Status PersistenceManager::RestoreState(ServerEnv* env) {
                    << " metadata changes, " << schema_count
                    << " schema changes, " << entry_count
                    << " data entries replayed.";
+    if (legacy_wal_mutations > 0) {
+      ABSL_LOG(WARNING)
+          << "WAL replay used legacy id-based matching for "
+          << legacy_wal_mutations
+          << " mutation(s) recorded before name-based WAL replay existed; "
+             "verify data for affected tables, or take a fresh snapshot to "
+             "avoid relying on id-based matching in future replays.";
+    }
   }
 
   return absl::OkStatus();
@@ -288,7 +339,7 @@ absl::Status PersistenceManager::ReplaySchemaChange(
   return absl::OkStatus();
 }
 
-absl::Status PersistenceManager::ReplayEntry(
+absl::StatusOr<int> PersistenceManager::ReplayEntry(
     const backend::WalEntry& entry, ServerEnv* env) {
   auto db_or = env->database_manager()->GetDatabase(entry.database_uri());
   if (!db_or.ok()) {
@@ -300,8 +351,11 @@ absl::Status PersistenceManager::ReplayEntry(
   auto database = *db_or;
   auto* storage = database->backend()->storage();
   auto* type_factory = database->backend()->type_factory();
+  const backend::Schema* schema = database->backend()->GetLatestSchema();
   absl::Time commit_timestamp =
       absl::FromUnixMicros(entry.commit_timestamp_micros());
+
+  int legacy_mutations = 0;
 
   for (const auto& mutation : entry.mutations()) {
     if (mutation.has_write()) {
@@ -331,8 +385,31 @@ absl::Status PersistenceManager::ReplayEntry(
         values.push_back(std::move(*value_or));
       }
 
-      auto status = storage->Write(commit_timestamp, write.table_id(),
-                                   *key_or, column_ids, values);
+      // Ids are reallocated whenever the schema is replayed from DDL, so a
+      // write's recorded ids may no longer identify the same table/columns
+      // in the schema as it stands now. If the write carries names (i.e.
+      // it postdates name-based WAL resolution), re-resolve them against
+      // the current schema; a resolution failure here is a hard error,
+      // since we have enough information to know something is wrong.
+      // Otherwise fall back to using the raw ids as-is (legacy behavior).
+      std::string table_id = write.table_id();
+      bool has_names = !write.table_name().empty() &&
+                       write.column_names_size() == write.column_ids_size();
+      if (has_names) {
+        GOOGLESQL_ASSIGN_OR_RETURN(
+            table_id, ResolveTableIdByName(schema, write.table_name()));
+        const backend::Table* table = schema->FindTable(write.table_name());
+        std::vector<std::string> column_names(write.column_names().begin(),
+                                              write.column_names().end());
+        GOOGLESQL_ASSIGN_OR_RETURN(column_ids,
+                         ResolveColumnIdsByName(table, column_names));
+      } else {
+        ++legacy_mutations;
+      }
+
+      auto status =
+          storage->Write(commit_timestamp, table_id, *key_or, column_ids,
+                        values);
       if (!status.ok()) {
         return absl::Status(
             status.code(),
@@ -361,10 +438,17 @@ absl::Status PersistenceManager::ReplayEntry(
                           end_key_or.status().message()));
       }
 
+      std::string table_id = del.table_id();
+      if (!del.table_name().empty()) {
+        GOOGLESQL_ASSIGN_OR_RETURN(
+            table_id, ResolveTableIdByName(schema, del.table_name()));
+      } else {
+        ++legacy_mutations;
+      }
+
       auto key_range = backend::KeyRange::ClosedOpen(
           *start_key_or, *end_key_or);
-      auto status = storage->Delete(commit_timestamp, del.table_id(),
-                                    key_range);
+      auto status = storage->Delete(commit_timestamp, table_id, key_range);
       if (!status.ok()) {
         return absl::Status(
             status.code(),
@@ -373,7 +457,7 @@ absl::Status PersistenceManager::ReplayEntry(
       }
     }
   }
-  return absl::OkStatus();
+  return legacy_mutations;
 }
 
 absl::Status PersistenceManager::SaveState(ServerEnv* env) {

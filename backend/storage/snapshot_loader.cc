@@ -57,11 +57,32 @@ namespace {
 
 namespace instance_api = ::google::spanner::admin::instance::v1;
 
+// Aggregate counts of unmatched tables/columns during restore, so we can
+// report a summary instead of one WARNING per cell followed by a silent
+// "success".
+struct PopulateStorageStats {
+  // Tables restored using id-based matching because the persisted table
+  // lacked a name (i.e. it was written by a pre-name-matching binary).
+  int legacy_format_tables = 0;
+  int missing_tables = 0;
+  int missing_columns = 0;
+  int rows_fully_dropped = 0;
+};
+
 // Populate the storage of a database from persisted data.
 //
 // We use a ReadWriteTransaction to write the data via Mutations, which
 // handles constraint checks and index maintenance correctly.
-absl::Status PopulateStorage(
+//
+// Column/table ids are reallocated whenever the schema is replayed from DDL
+// (schema replay assigns fresh ids in declaration order), so they cannot be
+// trusted to still identify the same table/column they did when the
+// snapshot was written -- particularly when a column was originally added
+// via ALTER TABLE ADD COLUMN and the persisted DDL folds it into an earlier
+// CREATE TABLE. We therefore match by name when the persisted table carries
+// one, and fall back to id-based matching only for snapshots written before
+// names were persisted.
+absl::StatusOr<PopulateStorageStats> PopulateStorage(
     backend::Database* database,
     const PersistedStorage& storage_proto,
     absl::Time restore_timestamp) {
@@ -69,6 +90,8 @@ absl::Status PopulateStorage(
   if (schema == nullptr) {
     return absl::InternalError("Database has no schema after creation");
   }
+
+  PopulateStorageStats stats;
 
   // Use the database's TypeFactory for value deserialization.
   googlesql::TypeFactory* type_factory = database->type_factory();
@@ -84,24 +107,40 @@ absl::Status PopulateStorage(
   Mutation mutation;
 
   for (const auto& table_proto : storage_proto.tables()) {
-    // Find the table in the schema by table_id.
+    // Match by name when the snapshot carries one (ids are reallocated on
+    // schema replay and cannot be trusted). Fall back to id-based matching
+    // for snapshots written before names were persisted.
+    bool use_names = !table_proto.table_name().empty() &&
+                     !table_proto.column_names().empty();
+
     const Table* table = nullptr;
-    for (const auto* t : schema->tables()) {
-      if (t->id() == table_proto.table_id()) {
-        table = t;
-        break;
+    if (use_names) {
+      table = schema->FindTable(table_proto.table_name());
+    } else {
+      ++stats.legacy_format_tables;
+      for (const auto* t : schema->tables()) {
+        if (t->id() == table_proto.table_id()) {
+          table = t;
+          break;
+        }
       }
     }
     if (table == nullptr) {
-      LOG(WARNING) << "Table with ID " << table_proto.table_id()
-                   << " not found in schema, skipping data restore.";
+      ++stats.missing_tables;
+      LOG(WARNING) << "Table "
+                   << (use_names ? table_proto.table_name()
+                                 : table_proto.table_id())
+                   << " not found in restored schema, skipping data restore.";
       continue;
     }
 
-    // Build a column_id -> Column* mapping for this table.
+    // Build a column_id -> Column* mapping for this table, used only for
+    // the legacy (id-based) fallback path.
     absl::flat_hash_map<ColumnID, const Column*> column_map;
-    for (const auto* col : table->columns()) {
-      column_map[col->id()] = col;
+    if (!use_names) {
+      for (const auto* col : table->columns()) {
+        column_map[col->id()] = col;
+      }
     }
 
     for (const auto& row_proto : table_proto.rows()) {
@@ -110,14 +149,25 @@ absl::Status PopulateStorage(
       std::vector<googlesql::Value> col_values;
 
       for (const auto& cell_proto : row_proto.cells()) {
-        auto it = column_map.find(cell_proto.column_id());
-        if (it == column_map.end()) {
-          LOG(WARNING) << "Column ID " << cell_proto.column_id()
+        const Column* col = nullptr;
+        if (use_names) {
+          auto name_it = table_proto.column_names().find(cell_proto.column_id());
+          if (name_it != table_proto.column_names().end()) {
+            col = table->FindColumn(name_it->second);
+          }
+        } else {
+          auto it = column_map.find(cell_proto.column_id());
+          if (it != column_map.end()) {
+            col = it->second;
+          }
+        }
+        if (col == nullptr) {
+          ++stats.missing_columns;
+          LOG(WARNING) << "Column " << cell_proto.column_id()
                        << " not found in table " << table->Name()
                        << ", skipping.";
           continue;
         }
-        const Column* col = it->second;
 
         // Generated column values (key or non-key) are recomputed by the
         // write path from their dependent columns on insert, so supplying
@@ -143,6 +193,9 @@ absl::Status PopulateStorage(
       }
 
       if (col_names.empty()) {
+        if (row_proto.cells_size() > 0) {
+          ++stats.rows_fully_dropped;
+        }
         continue;
       }
 
@@ -154,11 +207,17 @@ absl::Status PopulateStorage(
     }
   }
 
-  // Write the mutation and commit the transaction.
+  // Write the mutation and commit the transaction at restore_timestamp
+  // (rather than the current wall-clock time) so these row versions sort
+  // *older* than any WAL entries replayed on top of them afterwards -- WAL
+  // entries carry their own, real commit timestamps, all of which postdate
+  // the snapshot. Committing at "now" instead would make every restored row
+  // the newest version, permanently shadowing any WAL update/delete replayed
+  // on top of it.
   GOOGLESQL_RETURN_IF_ERROR(txn->Write(mutation));
-  GOOGLESQL_RETURN_IF_ERROR(txn->Commit());
+  GOOGLESQL_RETURN_IF_ERROR(txn->Commit(restore_timestamp));
 
-  return absl::OkStatus();
+  return stats;
 }
 
 }  // namespace
@@ -215,6 +274,8 @@ absl::StatusOr<absl::Time> SnapshotLoader::LoadSnapshot(
   }
 
   // Restore databases.
+  PopulateStorageStats total_stats;
+  bool any_new_format_mismatch = false;
   for (const auto& pd : snapshot.databases()) {
     // Build SchemaChangeOperation from DDL statements.
     // SchemaChangeOperation.statements is absl::Span<const std::string>,
@@ -238,8 +299,19 @@ absl::StatusOr<absl::Time> SnapshotLoader::LoadSnapshot(
       absl::Time data_timestamp =
           snapshot_time - absl::Microseconds(1);
 
-      GOOGLESQL_RETURN_IF_ERROR(
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          auto stats,
           PopulateStorage(database->backend(), pd.storage(), data_timestamp));
+      bool row_or_column_dropped = stats.missing_tables > 0 ||
+                                   stats.missing_columns > 0 ||
+                                   stats.rows_fully_dropped > 0;
+      if (stats.legacy_format_tables == 0 && row_or_column_dropped) {
+        any_new_format_mismatch = true;
+      }
+      total_stats.legacy_format_tables += stats.legacy_format_tables;
+      total_stats.missing_tables += stats.missing_tables;
+      total_stats.missing_columns += stats.missing_columns;
+      total_stats.rows_fully_dropped += stats.rows_fully_dropped;
     }
 
     // Restore ID generator sequence numbers if present.
@@ -259,6 +331,28 @@ absl::StatusOr<absl::Time> SnapshotLoader::LoadSnapshot(
     LOG(INFO) << "Restored database " << pd.database_uri() << " with "
               << ddl_statements.size() << " DDL statements and "
               << pd.storage().tables_size() << " tables of data.";
+  }
+
+  if (any_new_format_mismatch) {
+    return absl::InternalError(absl::StrCat(
+        "Snapshot restore could not match ", total_stats.missing_tables,
+        " table(s), ", total_stats.missing_columns, " column(s), and "
+        "dropped ", total_stats.rows_fully_dropped,
+        " row(s) even though the snapshot includes table/column names. "
+        "This indicates a bug or a corrupted snapshot file."));
+  }
+  if (total_stats.missing_tables > 0 || total_stats.missing_columns > 0 ||
+      total_stats.rows_fully_dropped > 0) {
+    LOG(ERROR)
+        << "Snapshot restore used legacy id-based matching and could not "
+           "match "
+        << total_stats.missing_tables << " table(s), "
+        << total_stats.missing_columns << " column(s); dropped "
+        << total_stats.rows_fully_dropped
+        << " row(s). This snapshot predates name-based restore matching "
+           "and column/table ids may have shifted (e.g. from a prior "
+           "ALTER TABLE ADD COLUMN). Take a fresh snapshot to fix this "
+           "permanently.";
   }
 
   LOG(INFO) << "Snapshot load complete.";

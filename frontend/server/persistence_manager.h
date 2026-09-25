@@ -75,7 +75,9 @@ class PersistenceManager {
       const backend::WalMetadataChange& change, ServerEnv* env);
   absl::Status ReplaySchemaChange(
       const backend::WalSchemaChange& change, ServerEnv* env);
-  absl::Status ReplayEntry(
+  // Returns the number of mutations replayed using legacy (id-only)
+  // matching, i.e. that predate name-based WAL resolution.
+  absl::StatusOr<int> ReplayEntry(
       const backend::WalEntry& entry, ServerEnv* env);
 
   void SnapshotLoop(ServerEnv* env, absl::Duration interval);

@@ -145,6 +145,40 @@ absl::StatusOr<std::map<int64_t, std::string>> ReadAllRows(
   return result;
 }
 
+// Generic helper for the ALTER TABLE / round-trip regression tests below:
+// reads `table`, whose first column must be an INT64 primary key named
+// "id", and returns a map from id to the remaining columns' string values
+// ("<NULL>" standing in for a SQL NULL, so it round-trips through EXPECT_EQ
+// on a plain std::string).
+absl::StatusOr<std::map<int64_t, std::vector<std::string>>> ReadTable(
+    backend::Database* db, const std::string& table,
+    const std::vector<std::string>& columns) {
+  backend::ReadOnlyOptions ro_options;
+  ro_options.bound = backend::TimestampBound::kStrongRead;
+  GOOGLESQL_ASSIGN_OR_RETURN(auto txn, db->CreateReadOnlyTransaction(ro_options));
+
+  backend::ReadArg read_arg;
+  read_arg.table = table;
+  read_arg.key_set = backend::KeySet::All();
+  read_arg.columns = columns;
+
+  std::unique_ptr<backend::RowCursor> cursor;
+  GOOGLESQL_RETURN_IF_ERROR(txn->Read(read_arg, &cursor));
+
+  std::map<int64_t, std::vector<std::string>> result;
+  while (cursor->Next()) {
+    int64_t id = cursor->ColumnValue(0).int64_value();
+    std::vector<std::string> values;
+    for (int i = 1; i < static_cast<int>(columns.size()); ++i) {
+      auto value = cursor->ColumnValue(i);
+      values.push_back(value.is_null() ? "<NULL>" : value.string_value());
+    }
+    result[id] = std::move(values);
+  }
+  GOOGLESQL_RETURN_IF_ERROR(cursor->Status());
+  return result;
+}
+
 class PersistenceManagerTest : public testing::Test {
  protected:
   void SetUp() override {
@@ -314,6 +348,216 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTripGeneratedColumn) {
   EXPECT_EQ(computed_by_key.size(), 2);
   EXPECT_EQ(computed_by_key[1], 11);
   EXPECT_EQ(computed_by_key[2], 22);
+}
+
+// ---------------------------------------------------------------------------
+// Regression test for: snapshot restore drops data for tables declared
+// after one whose schema included ALTER TABLE ... ADD COLUMN.
+//
+// The snapshot's DDL is compacted (PrintDDLStatements folds the added column
+// into its CREATE TABLE), so replaying it during restore reallocates every
+// table/column id from that point on in the one shared, database-wide id
+// sequence. TableB, declared after the altered TableA, is exactly the shape
+// that lost all of its rows in production.
+// ---------------------------------------------------------------------------
+TEST_F(PersistenceManagerTest, SnapshotRoundTripAlterAddColumnTwoTables) {
+  std::string snapshot_path = test_dir_ + "/snapshot.pb";
+
+  auto src_env = std::make_unique<ServerEnv>();
+  GOOGLESQL_ASSERT_OK(
+      src_env->instance_manager()
+          ->CreateInstance(kInstanceUri, MakeInstanceProto())
+          .status());
+
+  std::vector<std::string> ddl = {
+      R"(CREATE TABLE TableA (
+           id INT64 NOT NULL,
+           name STRING(MAX)
+         ) PRIMARY KEY(id))",
+      R"(CREATE TABLE TableB (
+           id INT64 NOT NULL,
+           val STRING(MAX)
+         ) PRIMARY KEY(id))"};
+  backend::SchemaChangeOperation schema_op;
+  schema_op.statements = ddl;
+  schema_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto src_db,
+      src_env->database_manager()->CreateDatabase(kDatabaseUri, schema_op,
+                                                   nullptr));
+
+  // Add a column to TableA as a separate schema change, as a real migration
+  // would -- this is what the compacted snapshot DDL later folds away.
+  {
+    std::vector<std::string> alter_ddl = {
+        "ALTER TABLE TableA ADD COLUMN extra STRING(MAX)"};
+    backend::SchemaChangeOperation alter_op;
+    alter_op.statements = alter_ddl;
+    alter_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
+    int num_successful = 0;
+    absl::Time commit_timestamp;
+    absl::Status backfill_status;
+    GOOGLESQL_ASSERT_OK(src_db->backend()->UpdateSchema(
+        alter_op, &num_successful, &commit_timestamp, &backfill_status));
+    GOOGLESQL_ASSERT_OK(backfill_status);
+  }
+
+  {
+    backend::ReadWriteOptions rw_options;
+    backend::RetryState retry_state;
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        auto txn, src_db->backend()->CreateReadWriteTransaction(
+                      rw_options, retry_state));
+
+    backend::Mutation mutation;
+    mutation.AddWriteOp(
+        backend::MutationOpType::kInsert, "TableA", {"id", "name", "extra"},
+        {{googlesql::values::Int64(1), googlesql::values::String("a1"),
+          googlesql::values::String("extra1")}});
+    mutation.AddWriteOp(backend::MutationOpType::kInsert, "TableB",
+                        {"id", "val"},
+                        {{googlesql::values::Int64(1),
+                          googlesql::values::String("b1")}});
+    GOOGLESQL_ASSERT_OK(txn->Write(mutation));
+    GOOGLESQL_ASSERT_OK(txn->Commit());
+  }
+
+  GOOGLESQL_ASSERT_OK(backend::SnapshotWriter::WriteSnapshot(
+      snapshot_path, src_env->instance_manager(),
+      src_env->database_manager()));
+
+  auto dst_env = std::make_unique<ServerEnv>();
+  GOOGLESQL_ASSERT_OK(
+      backend::SnapshotLoader::LoadSnapshot(snapshot_path, dst_env.get())
+          .status());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto restored_db,
+      dst_env->database_manager()->GetDatabase(kDatabaseUri));
+
+  const backend::Schema* schema = restored_db->backend()->GetLatestSchema();
+  ASSERT_NE(schema, nullptr);
+  ASSERT_NE(schema->FindTable("TableA"), nullptr);
+  EXPECT_NE(schema->FindTable("TableA")->FindColumn("extra"), nullptr);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto table_a,
+      ReadTable(restored_db->backend(), "TableA", {"id", "name", "extra"}));
+  ASSERT_EQ(table_a.size(), 1);
+  EXPECT_EQ(table_a[1], (std::vector<std::string>{"a1", "extra1"}));
+
+  // TableB is declared after the altered TableA, so its ids shift under the
+  // bug -- it lost all of its rows entirely.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto table_b, ReadTable(restored_db->backend(), "TableB", {"id", "val"}));
+  ASSERT_EQ(table_b.size(), 1);
+  EXPECT_EQ(table_b[1], (std::vector<std::string>{"b1"}));
+}
+
+// ---------------------------------------------------------------------------
+// Same regression, but with the table declared after the altered one
+// interleaved as a child -- the exact shape that lost 87 rows in production.
+// ---------------------------------------------------------------------------
+TEST_F(PersistenceManagerTest,
+       SnapshotRoundTripAlterAddColumnWithInterleavedChild) {
+  std::string snapshot_path = test_dir_ + "/snapshot.pb";
+
+  auto src_env = std::make_unique<ServerEnv>();
+  GOOGLESQL_ASSERT_OK(
+      src_env->instance_manager()
+          ->CreateInstance(kInstanceUri, MakeInstanceProto())
+          .status());
+
+  std::vector<std::string> ddl = {
+      R"(CREATE TABLE Parent (
+           id INT64 NOT NULL,
+           name STRING(MAX)
+         ) PRIMARY KEY(id))",
+      R"(CREATE TABLE Child (
+           id INT64 NOT NULL,
+           child_id INT64 NOT NULL,
+           data STRING(MAX)
+         ) PRIMARY KEY(id, child_id),
+         INTERLEAVE IN PARENT Parent ON DELETE CASCADE)"};
+  backend::SchemaChangeOperation schema_op;
+  schema_op.statements = ddl;
+  schema_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto src_db,
+      src_env->database_manager()->CreateDatabase(kDatabaseUri, schema_op,
+                                                   nullptr));
+
+  {
+    std::vector<std::string> alter_ddl = {
+        "ALTER TABLE Parent ADD COLUMN extra STRING(MAX)"};
+    backend::SchemaChangeOperation alter_op;
+    alter_op.statements = alter_ddl;
+    alter_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
+    int num_successful = 0;
+    absl::Time commit_timestamp;
+    absl::Status backfill_status;
+    GOOGLESQL_ASSERT_OK(src_db->backend()->UpdateSchema(
+        alter_op, &num_successful, &commit_timestamp, &backfill_status));
+    GOOGLESQL_ASSERT_OK(backfill_status);
+  }
+
+  {
+    backend::ReadWriteOptions rw_options;
+    backend::RetryState retry_state;
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        auto txn, src_db->backend()->CreateReadWriteTransaction(
+                      rw_options, retry_state));
+
+    backend::Mutation mutation;
+    mutation.AddWriteOp(
+        backend::MutationOpType::kInsert, "Parent", {"id", "name", "extra"},
+        {{googlesql::values::Int64(1), googlesql::values::String("p1"),
+          googlesql::values::String("extra1")}});
+    mutation.AddWriteOp(
+        backend::MutationOpType::kInsert, "Child",
+        {"id", "child_id", "data"},
+        {{googlesql::values::Int64(1), googlesql::values::Int64(1),
+          googlesql::values::String("c1")}});
+    GOOGLESQL_ASSERT_OK(txn->Write(mutation));
+    GOOGLESQL_ASSERT_OK(txn->Commit());
+  }
+
+  GOOGLESQL_ASSERT_OK(backend::SnapshotWriter::WriteSnapshot(
+      snapshot_path, src_env->instance_manager(),
+      src_env->database_manager()));
+
+  auto dst_env = std::make_unique<ServerEnv>();
+  GOOGLESQL_ASSERT_OK(
+      backend::SnapshotLoader::LoadSnapshot(snapshot_path, dst_env.get())
+          .status());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto restored_db,
+      dst_env->database_manager()->GetDatabase(kDatabaseUri));
+
+  backend::ReadOnlyOptions ro_options;
+  ro_options.bound = backend::TimestampBound::kStrongRead;
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto read_txn,
+      restored_db->backend()->CreateReadOnlyTransaction(ro_options));
+
+  backend::ReadArg read_arg;
+  read_arg.table = "Child";
+  read_arg.key_set = backend::KeySet::All();
+  read_arg.columns = {"id", "child_id", "data"};
+
+  std::unique_ptr<backend::RowCursor> cursor;
+  GOOGLESQL_ASSERT_OK(read_txn->Read(read_arg, &cursor));
+
+  int child_rows = 0;
+  while (cursor->Next()) {
+    ++child_rows;
+    EXPECT_EQ(cursor->ColumnValue(0).int64_value(), 1);
+    EXPECT_EQ(cursor->ColumnValue(1).int64_value(), 1);
+    EXPECT_EQ(cursor->ColumnValue(2).string_value(), "c1");
+  }
+  GOOGLESQL_ASSERT_OK(cursor->Status());
+  EXPECT_EQ(child_rows, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +872,218 @@ TEST_F(PersistenceManagerTest, SaveAndRestoreState) {
   EXPECT_EQ(rows[1], "hello");
   EXPECT_EQ(rows[2], "world");
   EXPECT_EQ(rows[3], "foo");
+}
+
+// ---------------------------------------------------------------------------
+// Comprehensive round-trip regression test.
+//
+// Exercises writes, updates, deletes, and ALTER TABLE ADD COLUMN both baked
+// into a snapshot and replayed from the WAL on top of it, then restores from
+// that same (never re-snapshotted) on-disk state twice in a row -- the
+// "crash-loop before a fresh snapshot ever completes" scenario. Covers, in
+// one test:
+//   - snapshot restore matching tables/columns by name after ADD COLUMN
+//     folds into the compacted DDL (bug: IDs are reallocated on replay).
+//   - WAL replay matching by name after its own ADD COLUMN (a second,
+//     independent ID reallocation on top of the snapshot's).
+//   - WAL updates/deletes are not shadowed by snapshot-restored rows (bug:
+//     PopulateStorage used to commit restored rows at "now" instead of the
+//     snapshot's timestamp, making them look newer than every WAL entry
+//     layered on top of them).
+//   - repeated restores of the same unconsolidated (snapshot + WAL) state
+//     are deterministic.
+// ---------------------------------------------------------------------------
+TEST_F(PersistenceManagerTest, FullRoundTripAcrossRepeatedRestartsWithoutFreshSnapshot) {
+  auto manager = PersistenceManager::Create(test_dir_);
+  ASSERT_NE(manager, nullptr);
+
+  auto env = std::make_unique<ServerEnv>();
+  GOOGLESQL_ASSERT_OK(
+      env->instance_manager()->CreateInstance(kInstanceUri, MakeInstanceProto())
+          .status());
+
+  std::vector<std::string> ddl = {
+      R"(CREATE TABLE TableA (
+           id INT64 NOT NULL,
+           name STRING(MAX)
+         ) PRIMARY KEY(id))",
+      R"(CREATE TABLE TableB (
+           id INT64 NOT NULL,
+           val STRING(MAX)
+         ) PRIMARY KEY(id))"};
+  backend::SchemaChangeOperation schema_op;
+  schema_op.statements = ddl;
+  schema_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
+  // No wal_writer yet -- these initial writes and the first ALTER all land
+  // directly in the eventual snapshot, not the WAL.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto db, env->database_manager()->CreateDatabase(kDatabaseUri, schema_op,
+                                                       nullptr));
+
+  // --- Phase 1: writes + an ALTER, all before the (only) snapshot. ---
+  {
+    backend::ReadWriteOptions rw_options;
+    backend::RetryState retry_state;
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        auto txn,
+        db->backend()->CreateReadWriteTransaction(rw_options, retry_state));
+    backend::Mutation mutation;
+    mutation.AddWriteOp(
+        backend::MutationOpType::kInsert, "TableA", {"id", "name"},
+        {{googlesql::values::Int64(1), googlesql::values::String("a1")},
+         {googlesql::values::Int64(2), googlesql::values::String("a2")},
+         {googlesql::values::Int64(3), googlesql::values::String("a3")}});
+    mutation.AddWriteOp(
+        backend::MutationOpType::kInsert, "TableB", {"id", "val"},
+        {{googlesql::values::Int64(1), googlesql::values::String("b1")},
+         {googlesql::values::Int64(2), googlesql::values::String("b2")},
+         {googlesql::values::Int64(3), googlesql::values::String("b3")}});
+    GOOGLESQL_ASSERT_OK(txn->Write(mutation));
+    GOOGLESQL_ASSERT_OK(txn->Commit());
+  }
+  {
+    std::vector<std::string> alter_ddl = {
+        "ALTER TABLE TableA ADD COLUMN extra STRING(MAX)"};
+    backend::SchemaChangeOperation alter_op;
+    alter_op.statements = alter_ddl;
+    alter_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
+    int num_successful = 0;
+    absl::Time commit_timestamp;
+    absl::Status backfill_status;
+    GOOGLESQL_ASSERT_OK(db->backend()->UpdateSchema(
+        alter_op, &num_successful, &commit_timestamp, &backfill_status));
+    GOOGLESQL_ASSERT_OK(backfill_status);
+  }
+  {
+    // Insert using the new column, update an existing row, delete another --
+    // all baked into the snapshot below.
+    backend::ReadWriteOptions rw_options;
+    backend::RetryState retry_state;
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        auto txn,
+        db->backend()->CreateReadWriteTransaction(rw_options, retry_state));
+    backend::Mutation mutation;
+    mutation.AddWriteOp(
+        backend::MutationOpType::kInsert, "TableA", {"id", "name", "extra"},
+        {{googlesql::values::Int64(4), googlesql::values::String("a4"),
+          googlesql::values::String("ex4")}});
+    mutation.AddWriteOp(
+        backend::MutationOpType::kUpdate, "TableA", {"id", "name"},
+        {{googlesql::values::Int64(1),
+          googlesql::values::String("a1-upd1")}});
+    mutation.AddDeleteOp("TableB",
+                         backend::KeySet(backend::Key(
+                             {googlesql::values::Int64(2)})));
+    GOOGLESQL_ASSERT_OK(txn->Write(mutation));
+    GOOGLESQL_ASSERT_OK(txn->Commit());
+  }
+
+  // State right before the snapshot:
+  //   TableA: 1->(a1-upd1, NULL), 2->(a2, NULL), 3->(a3, NULL), 4->(a4, ex4)
+  //   TableB: 1->b1, 3->b3   (2 deleted)
+  GOOGLESQL_ASSERT_OK(manager->SaveState(env.get()));
+
+  // --- Phase 2: a second ALTER plus more writes, living only in the WAL. ---
+  manager = PersistenceManager::Create(test_dir_);
+  ASSERT_NE(manager, nullptr);
+  env->set_wal_writer(manager->wal_writer());
+  GOOGLESQL_ASSERT_OK(
+      db->backend()->EnablePersistence(kDatabaseUri, manager->wal_writer()));
+
+  {
+    std::vector<std::string> alter_ddl = {
+        "ALTER TABLE TableB ADD COLUMN tag STRING(MAX)"};
+    backend::SchemaChangeOperation alter_op;
+    alter_op.statements = alter_ddl;
+    alter_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
+    int num_successful = 0;
+    absl::Time commit_timestamp;
+    absl::Status backfill_status;
+    GOOGLESQL_ASSERT_OK(db->backend()->UpdateSchema(
+        alter_op, &num_successful, &commit_timestamp, &backfill_status));
+    GOOGLESQL_ASSERT_OK(backfill_status);
+
+    // Real DDL replication logs the schema change to the WAL alongside
+    // applying it live (see frontend/handlers/databases.cc); reproduce that
+    // here since this test operates below that layer.
+    backend::WalRecord record;
+    auto* sc = record.mutable_schema_change();
+    sc->set_database_uri(kDatabaseUri);
+    sc->set_dialect(static_cast<int32_t>(database_api::GOOGLE_STANDARD_SQL));
+    for (const auto& stmt : alter_op.statements) {
+      sc->add_ddl_statements(std::string(stmt));
+    }
+    GOOGLESQL_ASSERT_OK(manager->wal_writer()->Append(record));
+  }
+  {
+    backend::ReadWriteOptions rw_options;
+    backend::RetryState retry_state;
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        auto txn,
+        db->backend()->CreateReadWriteTransaction(rw_options, retry_state));
+    backend::Mutation mutation;
+    mutation.AddWriteOp(
+        backend::MutationOpType::kInsert, "TableB", {"id", "val", "tag"},
+        {{googlesql::values::Int64(4), googlesql::values::String("b4"),
+          googlesql::values::String("tagB4")}});
+    mutation.AddWriteOp(
+        backend::MutationOpType::kUpdate, "TableA", {"id", "name"},
+        {{googlesql::values::Int64(2),
+          googlesql::values::String("a2-upd2")}});
+    mutation.AddDeleteOp("TableA",
+                         backend::KeySet(backend::Key(
+                             {googlesql::values::Int64(3)})));
+    GOOGLESQL_ASSERT_OK(txn->Write(mutation));
+    GOOGLESQL_ASSERT_OK(txn->Commit());
+  }
+
+  // Final expected state after both phases:
+  //   TableA: 1->(a1-upd1, NULL), 2->(a2-upd2, NULL), 4->(a4, ex4) (3 deleted)
+  //   TableB: 1->(b1, NULL), 3->(b3, NULL), 4->(b4, tagB4) (2 deleted)
+  std::map<int64_t, std::vector<std::string>> want_table_a = {
+      {1, {"a1-upd1", "<NULL>"}},
+      {2, {"a2-upd2", "<NULL>"}},
+      {4, {"a4", "ex4"}},
+  };
+  std::map<int64_t, std::vector<std::string>> want_table_b = {
+      {1, {"b1", "<NULL>"}},
+      {3, {"b3", "<NULL>"}},
+      {4, {"b4", "tagB4"}},
+  };
+
+  // --- Restart #1: no fresh snapshot was ever taken after phase 2. ---
+  auto restart1 = std::make_unique<ServerEnv>();
+  GOOGLESQL_ASSERT_OK(manager->RestoreState(restart1.get()));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto restart1_db, restart1->database_manager()->GetDatabase(kDatabaseUri));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto restart1_a,
+      ReadTable(restart1_db->backend(), "TableA", {"id", "name", "extra"}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto restart1_b,
+      ReadTable(restart1_db->backend(), "TableB", {"id", "val", "tag"}));
+  EXPECT_EQ(restart1_a, want_table_a);
+  EXPECT_EQ(restart1_b, want_table_b);
+
+  // --- Restart #2: restore again from the exact same on-disk state (still
+  // no fresh snapshot in between) -- must reproduce identical results. ---
+  auto restart2 = std::make_unique<ServerEnv>();
+  GOOGLESQL_ASSERT_OK(manager->RestoreState(restart2.get()));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto restart2_db, restart2->database_manager()->GetDatabase(kDatabaseUri));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto restart2_a,
+      ReadTable(restart2_db->backend(), "TableA", {"id", "name", "extra"}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto restart2_b,
+      ReadTable(restart2_db->backend(), "TableB", {"id", "val", "tag"}));
+  EXPECT_EQ(restart2_a, want_table_a);
+  EXPECT_EQ(restart2_b, want_table_b);
+
+  // Compare the two restarts against each other directly, not just against
+  // the expected values.
+  EXPECT_EQ(restart1_a, restart2_a);
+  EXPECT_EQ(restart1_b, restart2_b);
 }
 
 }  // namespace
