@@ -502,7 +502,7 @@ absl::Status PersistenceManager::SaveState(ServerEnv* env) {
         absl::StrCat("Failed to sync WAL: ", status.message()));
   }
 
-  status = backend::WalWriter::Clear(wal_directory());
+  status = wal_writer_->Clear();
   if (!status.ok()) {
     return absl::Status(
         status.code(),

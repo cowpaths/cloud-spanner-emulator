@@ -422,6 +422,34 @@ absl::Status WalWriter::Clear(const std::string& wal_directory) {
   return absl::OkStatus();
 }
 
+absl::Status WalWriter::Clear() {
+  absl::MutexLock lock(&mu_);
+
+  // Close the current segment before unlinking anything, so no fd is left
+  // pointing at a file we're about to delete.
+  if (fd_ >= 0) {
+    ::fsync(fd_);
+    ::close(fd_);
+    fd_ = -1;
+  }
+
+  auto files_or = ListWalFiles(wal_directory_);
+  if (!files_or.ok()) return files_or.status();
+  for (const auto& file : files_or.value()) {
+    std::string path = absl::StrCat(wal_directory_, "/", file);
+    if (::unlink(path.c_str()) != 0 && errno != ENOENT) {
+      return absl::InternalError(
+          absl::StrCat("Failed to delete WAL file '", path,
+                        "': ", strerror(errno)));
+    }
+  }
+
+  // Open a fresh segment now, while still holding mu_, so Append() can
+  // never observe fd_ == -1 nor write to the deleted file.
+  segment_number_ = 0;
+  return OpenNewSegment();
+}
+
 }  // namespace backend
 }  // namespace emulator
 }  // namespace spanner

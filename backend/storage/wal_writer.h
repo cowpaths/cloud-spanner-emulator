@@ -69,8 +69,18 @@ class WalWriter {
   static absl::StatusOr<std::vector<WalRecord>> ReadAll(
       const std::string& wal_directory);
 
-  // Delete all WAL files in the directory (after snapshot).
+  // Delete all WAL files in the directory. Use only when no writer is open
+  // on the directory (e.g. test cleanup) -- it does not touch a live
+  // writer's open file descriptor, so calling it while a WalWriter is
+  // appending leaves that writer writing to an unlinked inode.
   static absl::Status Clear(const std::string& wal_directory);
+
+  // Delete all existing WAL files and start a fresh segment, atomically
+  // with respect to Append(). Call this (instead of the static Clear) after
+  // a snapshot when the writer instance is still live: it closes the
+  // current segment and opens a new one under the writer's lock before
+  // returning, so no write is ever appended to a deleted file.
+  absl::Status Clear();
 
  private:
   explicit WalWriter(const std::string& wal_directory);

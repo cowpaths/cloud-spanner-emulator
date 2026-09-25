@@ -23,11 +23,11 @@
 
 #include "google/spanner/admin/database/v1/common.pb.h"
 #include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/time/time.h"
 #include "backend/access/write.h"
 #include "backend/common/ids.h"
@@ -56,6 +56,29 @@ namespace backend {
 namespace {
 
 namespace instance_api = ::google::spanner::admin::instance::v1;
+
+// Table/column ids are allocated by UniqueIdGenerator::NextId(prefix) (see
+// backend/common/ids.h) as "<prefix>:<seq>", where the schema updater passes
+// the table name as the table id's prefix, and "<table_name>.<column_name>"
+// as the column id's prefix (schema_updater.cc). Legacy snapshots (written
+// before PersistedTable::table_name/column_names existed) only carry these
+// raw ids, and the ids themselves can't be compared directly across a
+// restore since schema replay reallocates fresh sequence numbers -- but the
+// name embedded in the id survives, so we recover it from the id string.
+absl::string_view StripLegacyIdSequence(absl::string_view id) {
+  size_t colon = id.rfind(':');
+  return colon == absl::string_view::npos ? id : id.substr(0, colon);
+}
+
+absl::string_view TableNameFromLegacyId(absl::string_view table_id) {
+  return StripLegacyIdSequence(table_id);
+}
+
+absl::string_view ColumnNameFromLegacyId(absl::string_view column_id) {
+  absl::string_view name = StripLegacyIdSequence(column_id);
+  size_t dot = name.rfind('.');
+  return dot == absl::string_view::npos ? name : name.substr(dot + 1);
+}
 
 // Aggregate counts of unmatched tables/columns during restore, so we can
 // report a summary instead of one WARNING per cell followed by a silent
@@ -113,34 +136,26 @@ absl::StatusOr<PopulateStorageStats> PopulateStorage(
     bool use_names = !table_proto.table_name().empty() &&
                      !table_proto.column_names().empty();
 
+    // Legacy ids can't be compared directly (schema replay reallocates fresh
+    // sequence numbers), but the name embedded in the id string survives, so
+    // resolve legacy tables/columns by that recovered name too -- not by
+    // literal id equality, which would only ever match a table/column that
+    // happened to be assigned the exact same sequence number again.
+    std::string legacy_table_name(TableNameFromLegacyId(table_proto.table_id()));
+
     const Table* table = nullptr;
     if (use_names) {
       table = schema->FindTable(table_proto.table_name());
     } else {
       ++stats.legacy_format_tables;
-      for (const auto* t : schema->tables()) {
-        if (t->id() == table_proto.table_id()) {
-          table = t;
-          break;
-        }
-      }
+      table = schema->FindTable(legacy_table_name);
     }
     if (table == nullptr) {
       ++stats.missing_tables;
       LOG(WARNING) << "Table "
-                   << (use_names ? table_proto.table_name()
-                                 : table_proto.table_id())
+                   << (use_names ? table_proto.table_name() : legacy_table_name)
                    << " not found in restored schema, skipping data restore.";
       continue;
-    }
-
-    // Build a column_id -> Column* mapping for this table, used only for
-    // the legacy (id-based) fallback path.
-    absl::flat_hash_map<ColumnID, const Column*> column_map;
-    if (!use_names) {
-      for (const auto* col : table->columns()) {
-        column_map[col->id()] = col;
-      }
     }
 
     for (const auto& row_proto : table_proto.rows()) {
@@ -156,10 +171,8 @@ absl::StatusOr<PopulateStorageStats> PopulateStorage(
             col = table->FindColumn(name_it->second);
           }
         } else {
-          auto it = column_map.find(cell_proto.column_id());
-          if (it != column_map.end()) {
-            col = it->second;
-          }
+          col = table->FindColumn(
+              std::string(ColumnNameFromLegacyId(cell_proto.column_id())));
         }
         if (col == nullptr) {
           ++stats.missing_columns;

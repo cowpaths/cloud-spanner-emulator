@@ -59,7 +59,7 @@ cc_library(
 
 cc_test(
     name = "change_stream_partition_churner_test",
-    size = "small",
+    size = "medium",
     srcs = [
         "change_stream_partition_churner_test.cc",
     ],

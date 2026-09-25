@@ -18,6 +18,7 @@
 
 #include <ftw.h>
 
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -34,6 +35,7 @@
 #include "backend/access/write.h"
 #include "backend/datamodel/key_set.h"
 #include "backend/schema/updater/schema_updater.h"
+#include "backend/storage/persistence.pb.h"
 #include "backend/storage/snapshot_loader.h"
 #include "backend/storage/snapshot_writer.h"
 #include "backend/storage/wal_writer.h"
@@ -177,6 +179,26 @@ absl::StatusOr<std::map<int64_t, std::vector<std::string>>> ReadTable(
   }
   GOOGLESQL_RETURN_IF_ERROR(cursor->Status());
   return result;
+}
+
+// Rewrites the snapshot at `snapshot_path` to clear every PersistedTable's
+// table_name/column_names, simulating a snapshot written by a binary that
+// predates that field (e.g. fs.1) -- the loader's legacy id-based fallback
+// then has to recover names from the raw table/column ids instead.
+void StripPersistedNamesForLegacyUpgradeTest(const std::string& snapshot_path) {
+  backend::EmulatorSnapshot snapshot;
+  {
+    std::ifstream in(snapshot_path, std::ios::binary);
+    ASSERT_TRUE(snapshot.ParseFromIstream(&in));
+  }
+  for (auto& db : *snapshot.mutable_databases()) {
+    for (auto& table : *db.mutable_storage()->mutable_tables()) {
+      table.clear_table_name();
+      table.clear_column_names();
+    }
+  }
+  std::ofstream out(snapshot_path, std::ios::binary | std::ios::trunc);
+  ASSERT_TRUE(snapshot.SerializeToOstream(&out));
 }
 
 class PersistenceManagerTest : public testing::Test {
@@ -448,6 +470,108 @@ TEST_F(PersistenceManagerTest, SnapshotRoundTripAlterAddColumnTwoTables) {
 
   // TableB is declared after the altered TableA, so its ids shift under the
   // bug -- it lost all of its rows entirely.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto table_b, ReadTable(restored_db->backend(), "TableB", {"id", "val"}));
+  ASSERT_EQ(table_b.size(), 1);
+  EXPECT_EQ(table_b[1], (std::vector<std::string>{"b1"}));
+}
+
+// ---------------------------------------------------------------------------
+// Same regression as SnapshotRoundTripAlterAddColumnTwoTables, but the
+// snapshot on disk is stripped of table_name/column_names first, simulating
+// one written by a pre-upgrade binary (fs.1) that predates those fields.
+// The loader's legacy id-based fallback must recover names from the raw
+// ids (format "<name>:<seq>" / "<table>.<column>:<seq>", see
+// backend/common/ids.h) rather than compare ids literally, since schema
+// replay reallocates fresh sequence numbers.
+// ---------------------------------------------------------------------------
+TEST_F(PersistenceManagerTest, SnapshotRoundTripLegacyFormatAfterAddColumn) {
+  std::string snapshot_path = test_dir_ + "/snapshot.pb";
+
+  auto src_env = std::make_unique<ServerEnv>();
+  GOOGLESQL_ASSERT_OK(
+      src_env->instance_manager()
+          ->CreateInstance(kInstanceUri, MakeInstanceProto())
+          .status());
+
+  std::vector<std::string> ddl = {
+      R"(CREATE TABLE TableA (
+           id INT64 NOT NULL,
+           name STRING(MAX)
+         ) PRIMARY KEY(id))",
+      R"(CREATE TABLE TableB (
+           id INT64 NOT NULL,
+           val STRING(MAX)
+         ) PRIMARY KEY(id))"};
+  backend::SchemaChangeOperation schema_op;
+  schema_op.statements = ddl;
+  schema_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto src_db,
+      src_env->database_manager()->CreateDatabase(kDatabaseUri, schema_op,
+                                                   nullptr));
+
+  {
+    std::vector<std::string> alter_ddl = {
+        "ALTER TABLE TableA ADD COLUMN extra STRING(MAX)"};
+    backend::SchemaChangeOperation alter_op;
+    alter_op.statements = alter_ddl;
+    alter_op.database_dialect = database_api::GOOGLE_STANDARD_SQL;
+    int num_successful = 0;
+    absl::Time commit_timestamp;
+    absl::Status backfill_status;
+    GOOGLESQL_ASSERT_OK(src_db->backend()->UpdateSchema(
+        alter_op, &num_successful, &commit_timestamp, &backfill_status));
+    GOOGLESQL_ASSERT_OK(backfill_status);
+  }
+
+  {
+    backend::ReadWriteOptions rw_options;
+    backend::RetryState retry_state;
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        auto txn, src_db->backend()->CreateReadWriteTransaction(
+                      rw_options, retry_state));
+
+    backend::Mutation mutation;
+    mutation.AddWriteOp(
+        backend::MutationOpType::kInsert, "TableA", {"id", "name", "extra"},
+        {{googlesql::values::Int64(1), googlesql::values::String("a1"),
+          googlesql::values::String("extra1")}});
+    mutation.AddWriteOp(backend::MutationOpType::kInsert, "TableB",
+                        {"id", "val"},
+                        {{googlesql::values::Int64(1),
+                          googlesql::values::String("b1")}});
+    GOOGLESQL_ASSERT_OK(txn->Write(mutation));
+    GOOGLESQL_ASSERT_OK(txn->Commit());
+  }
+
+  GOOGLESQL_ASSERT_OK(backend::SnapshotWriter::WriteSnapshot(
+      snapshot_path, src_env->instance_manager(),
+      src_env->database_manager()));
+  StripPersistedNamesForLegacyUpgradeTest(snapshot_path);
+
+  auto dst_env = std::make_unique<ServerEnv>();
+  GOOGLESQL_ASSERT_OK(
+      backend::SnapshotLoader::LoadSnapshot(snapshot_path, dst_env.get())
+          .status());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto restored_db,
+      dst_env->database_manager()->GetDatabase(kDatabaseUri));
+
+  const backend::Schema* schema = restored_db->backend()->GetLatestSchema();
+  ASSERT_NE(schema, nullptr);
+  ASSERT_NE(schema->FindTable("TableA"), nullptr);
+  EXPECT_NE(schema->FindTable("TableA")->FindColumn("extra"), nullptr);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto table_a,
+      ReadTable(restored_db->backend(), "TableA", {"id", "name", "extra"}));
+  ASSERT_EQ(table_a.size(), 1);
+  EXPECT_EQ(table_a[1], (std::vector<std::string>{"a1", "extra1"}));
+
+  // TableB is declared after the altered TableA, so its ids shift under the
+  // original bug -- with literal id-based matching it would lose all rows.
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto table_b, ReadTable(restored_db->backend(), "TableB", {"id", "val"}));
   ASSERT_EQ(table_b.size(), 1);
