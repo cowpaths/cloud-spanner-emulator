@@ -15,9 +15,12 @@
 //
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>  // NOLINT
 #include <csignal>
 #include <cstdlib>
 #include <memory>
+#include <thread>  // NOLINT
 
 #include "absl/flags/parse.h"
 #include "absl/flags/usage.h"
@@ -31,12 +34,18 @@ using Server = ::google::spanner::emulator::frontend::Server;
 
 namespace {
 Server* g_server = nullptr;
+std::atomic<bool> g_shutdown_requested{false};
 
+// Signal handlers may only call async-signal-safe functions. Shutdown() logs
+// and takes locks (e.g. to stop the periodic snapshot thread and write a
+// final snapshot), neither of which is signal-safe -- if the signal
+// interrupts a thread that already happens to be inside mutex-internal code
+// anywhere in the process, re-entering it here crashes with "illegal
+// recursion into Mutex code". Setting an atomic flag is signal-safe; the
+// actual shutdown work is deferred to a plain thread that polls it (see
+// main()).
 void SignalHandler(int signal) {
-  ABSL_LOG(INFO) << "Received signal " << signal << ", shutting down.";
-  if (g_server) {
-    g_server->Shutdown();
-  }
+  g_shutdown_requested.store(true, std::memory_order_relaxed);
 }
 }  // namespace
 
@@ -87,12 +96,25 @@ int main(int argc, char** argv) {
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
+  // The actual shutdown work (saving persistent state, stopping the gRPC
+  // server) must not run on the signal handler's call stack -- see
+  // SignalHandler above. This thread does that work instead, once the
+  // handler flags a signal was received.
+  std::thread shutdown_watcher([&] {
+    while (!g_shutdown_requested.load(std::memory_order_relaxed)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    ABSL_LOG(INFO) << "Shutdown requested, saving persistent state.";
+    g_server->Shutdown();
+  });
+
   ABSL_LOG(INFO) << "Cloud Spanner Emulator running.";
   ABSL_LOG(INFO) << "Server address: "
             << absl::StrCat(server->host(), ":", server->port());
 
   // Block forever until the server is terminated.
   server->WaitForShutdown();
+  shutdown_watcher.join();
 
   return EXIT_SUCCESS;
 }

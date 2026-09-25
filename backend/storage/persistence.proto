@@ -62,6 +62,15 @@ message PersistedRow {
 message PersistedTable {
   string table_id = 1;
   repeated PersistedRow rows = 2;
+  // Table name at snapshot time. Column/table IDs are reallocated on restore
+  // (schema replay assigns fresh IDs in DDL-declaration order), so the
+  // loader matches by name when available. Empty means the snapshot
+  // predates this field; the loader falls back to id-based matching.
+  string table_name = 3;
+  // Maps this table's column_id (as used in PersistedCell.column_id) to the
+  // column's name at snapshot time. Empty means the snapshot predates this
+  // field; the loader falls back to id-based matching.
+  map<string, string> column_names = 4;
 }
 
 // Record of a dropped table for garbage collection.
@@ -119,6 +128,14 @@ message WalWrite {
   PersistedKey key = 3;
   repeated string column_ids = 4;
   repeated PersistedValue values = 5;
+  // Table/column names resolved against the schema live at write time,
+  // parallel to table_id/column_ids. Used to re-resolve against the
+  // *current* schema's ids at replay time, since ids may have been
+  // reallocated by an intervening snapshot restore or schema-change replay.
+  // table_name empty, or column_names size mismatched with column_ids,
+  // means this is a legacy entry; replay falls back to the raw ids.
+  string table_name = 6;
+  repeated string column_names = 7;
 }
 
 // A delete mutation in the WAL.
@@ -126,6 +143,8 @@ message WalDelete {
   string table_id = 1;
   PersistedKey start_key = 2;
   PersistedKey end_key = 3;
+  // Table name at write time; see WalWrite.table_name. Empty means legacy.
+  string table_name = 4;
 }
 
 // A single mutation in the WAL (either a write or delete).

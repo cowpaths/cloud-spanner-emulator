@@ -95,6 +95,7 @@ absl::StatusOr<PersistedStorage> SnapshotWriter::SerializeStorage(
 
     PersistedTable* table_proto = storage_proto.add_tables();
     table_proto->set_table_id(table->id());
+    table_proto->set_table_name(table->Name());
 
     // Build list of column names and IDs for this table.
     std::vector<std::string> column_names;
@@ -104,6 +105,13 @@ absl::StatusOr<PersistedStorage> SnapshotWriter::SerializeStorage(
       column_names.push_back(col->Name());
       column_ids.push_back(col->id());
       columns.push_back(col);
+    }
+
+    // Record the id -> name mapping so the loader can match by name even
+    // after schema replay reallocates ids (see PersistedTable.column_names).
+    auto& column_names_proto = *table_proto->mutable_column_names();
+    for (int i = 0; i < static_cast<int>(column_ids.size()); ++i) {
+      column_names_proto[column_ids[i]] = column_names[i];
     }
 
     // Read all rows from this table.

@@ -17,6 +17,8 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_STORAGE_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_STORAGE_H_
 
+#include <functional>
+
 #include "googlesql/public/value.h"
 #include "absl/status/status.h"
 #include "absl/time/time.h"
@@ -30,6 +32,8 @@ namespace google {
 namespace spanner {
 namespace emulator {
 namespace backend {
+
+class Schema;
 
 // Storage defines the interface for a multi-version data store.
 //
@@ -87,6 +91,13 @@ class Storage {
 
   virtual void MarkDroppedColumn(absl::Time timestamp, TableID dropped_table_id,
                                  ColumnID dropped_column_id) = 0;
+
+  // Optionally installs an accessor for this storage's live schema. Used by
+  // persistent implementations to resolve table/column names for WAL
+  // entries (ids are reallocated whenever the schema is replayed from DDL,
+  // so a name is needed to reconcile a write against a later schema). No-op
+  // by default.
+  virtual void SetSchemaAccessor(std::function<const Schema*()> schema_accessor) {}
 };
 
 }  // namespace backend

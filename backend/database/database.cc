@@ -78,6 +78,15 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
   } else {
     database->storage_ = std::make_unique<InMemoryStorage>();
   }
+  // Let storage resolve table/column names for WAL entries against this
+  // database's live schema (needed since ids are reallocated on schema
+  // replay). The callback is only invoked lazily on a later write, by which
+  // point Create() below has finished and versioned_catalog_ is set.
+  {
+    Database* db = database.get();
+    database->storage_->SetSchemaAccessor(
+        [db]() -> const Schema* { return db->GetLatestSchema(); });
+  }
   database->lock_manager_ = std::make_unique<LockManager>(clock);
   database->type_factory_ = std::make_unique<googlesql::TypeFactory>();
   database->action_manager_ = std::make_unique<ActionManager>();
@@ -236,6 +245,8 @@ absl::Status Database::EnablePersistence(
       static_cast<InMemoryStorage*>(storage_.release()));
   storage_ = PersistentStorage::Wrap(
       database_uri, std::move(owned), std::move(wal_writer));
+  storage_->SetSchemaAccessor(
+      [this]() -> const Schema* { return GetLatestSchema(); });
   return absl::OkStatus();
 }
 
