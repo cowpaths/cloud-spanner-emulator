@@ -179,6 +179,8 @@ cc_library(
         "//backend/datamodel:key",
         "//backend/datamodel:key_range",
         "//backend/schema/catalog:schema",
+        "//backend/schema/graph:schema_graph",
+        "//backend/schema/graph:schema_node",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/time",

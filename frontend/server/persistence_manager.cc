@@ -39,6 +39,8 @@
 #include "backend/schema/catalog/column.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/table.h"
+#include "backend/schema/graph/schema_graph.h"
+#include "backend/schema/graph/schema_node.h"
 #include "backend/schema/updater/schema_updater.h"
 #include "backend/storage/persistence.pb.h"
 #include "backend/storage/snapshot_loader.h"
@@ -73,13 +75,33 @@ absl::Status EnsureDirectoryExists(const std::string& path) {
                     ", errno: ", strerror(errno)));
 }
 
+// Finds the table with the given name anywhere in `schema`, including
+// internal tables (index backing tables, change stream data/partition
+// tables) that `Schema::FindTable()` deliberately excludes since they're
+// not user-visible. WAL writes happen for these tables too (e.g. index
+// maintenance, change stream production), so replay must be able to
+// resolve their names back to ids or their WAL entries fail to replay
+// entirely. Schema::GetSchemaGraph() exposes every schema node, which is
+// how Schema itself builds its public-only FindTable() index.
+const backend::Table* FindAnyTableByName(const backend::Schema* schema,
+                                         const std::string& table_name) {
+  for (const backend::SchemaNode* node :
+       schema->GetSchemaGraph()->GetSchemaNodes()) {
+    const backend::Table* table = node->As<const backend::Table>();
+    if (table != nullptr && table->Name() == table_name) {
+      return table;
+    }
+  }
+  return nullptr;
+}
+
 // Resolves `table_name` against `schema`'s current tables, returning the
 // table's current id. Used to reconcile a WAL entry's recorded name against
 // whatever id the table has now, since ids are reallocated whenever the
 // schema is replayed from DDL.
 absl::StatusOr<backend::TableID> ResolveTableIdByName(
     const backend::Schema* schema, const std::string& table_name) {
-  const backend::Table* table = schema->FindTable(table_name);
+  const backend::Table* table = FindAnyTableByName(schema, table_name);
   if (table == nullptr) {
     return absl::NotFoundError(absl::StrCat(
         "Table \"", table_name,
@@ -398,7 +420,7 @@ absl::StatusOr<int> PersistenceManager::ReplayEntry(
       if (has_names) {
         GOOGLESQL_ASSIGN_OR_RETURN(
             table_id, ResolveTableIdByName(schema, write.table_name()));
-        const backend::Table* table = schema->FindTable(write.table_name());
+        const backend::Table* table = FindAnyTableByName(schema, write.table_name());
         std::vector<std::string> column_names(write.column_names().begin(),
                                               write.column_names().end());
         GOOGLESQL_ASSIGN_OR_RETURN(column_ids,

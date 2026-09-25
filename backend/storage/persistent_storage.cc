@@ -30,6 +30,8 @@
 #include "backend/schema/catalog/column.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/table.h"
+#include "backend/schema/graph/schema_graph.h"
+#include "backend/schema/graph/schema_node.h"
 #include "backend/storage/in_memory_storage.h"
 #include "backend/storage/iterator.h"
 #include "backend/storage/persistence.pb.h"
@@ -43,6 +45,24 @@ namespace backend {
 
 namespace {
 
+// Finds the table with the given id anywhere in `schema`, including
+// internal tables (index backing tables, change stream data/partition
+// tables) that `Schema::tables()`/`FindTable()` deliberately exclude since
+// they're not user-visible. WAL writes happen for these tables too (e.g.
+// index maintenance, change stream production), so name resolution must
+// cover them or their WAL entries silently stay id-only forever, even on a
+// build with this fix. Schema::GetSchemaGraph() exposes every schema node,
+// which is how Schema itself builds its public-only tables_ list.
+const Table* FindAnyTableById(const Schema* schema, const TableID& table_id) {
+  for (const SchemaNode* node : schema->GetSchemaGraph()->GetSchemaNodes()) {
+    const Table* table = node->As<const Table>();
+    if (table != nullptr && table->id() == table_id) {
+      return table;
+    }
+  }
+  return nullptr;
+}
+
 // Best-effort resolution of table_id/column_ids to their current names in
 // `schema`. Ids are reallocated whenever the schema is replayed from DDL, so
 // names captured here at write time are what later replay uses to reconcile
@@ -55,13 +75,7 @@ bool TryResolveNames(const Schema* schema, const TableID& table_id,
                      std::string* table_name,
                      std::vector<std::string>* column_names) {
   if (schema == nullptr) return false;
-  const Table* table = nullptr;
-  for (const auto* t : schema->tables()) {
-    if (t->id() == table_id) {
-      table = t;
-      break;
-    }
-  }
+  const Table* table = FindAnyTableById(schema, table_id);
   if (table == nullptr) return false;
 
   std::vector<std::string> names;
@@ -87,13 +101,10 @@ bool TryResolveNames(const Schema* schema, const TableID& table_id,
 bool TryResolveTableName(const Schema* schema, const TableID& table_id,
                          std::string* table_name) {
   if (schema == nullptr) return false;
-  for (const auto* t : schema->tables()) {
-    if (t->id() == table_id) {
-      *table_name = t->Name();
-      return true;
-    }
-  }
-  return false;
+  const Table* table = FindAnyTableById(schema, table_id);
+  if (table == nullptr) return false;
+  *table_name = table->Name();
+  return true;
 }
 
 }  // namespace

@@ -92,6 +92,8 @@ cc_library(
         "//backend/common:ids",
         "//backend/datamodel:key_range",
         "//backend/schema/catalog:schema",
+        "//backend/schema/graph:schema_graph",
+        "//backend/schema/graph:schema_node",
         "//backend/schema/updater:schema_updater",
         "//backend/storage:persistence_cc_proto",
         "//backend/storage:snapshot_loader",
