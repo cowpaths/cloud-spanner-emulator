@@ -220,6 +220,25 @@ TEST_F(WalWriterTest, ClearRemovesAllWalFiles) {
   EXPECT_EQ(records_after.size(), 0);
 }
 
+TEST_F(WalWriterTest, InstanceClearLetsLiveWriterKeepAppending) {
+  // Regression test: after a snapshot, the writer instance's Clear() must
+  // leave the writer able to durably append -- not still holding an fd to
+  // an unlinked file (the WAL-writer-keeps-writing-to-a-deleted-file bug).
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto writer, WalWriter::Create(test_dir_));
+  GOOGLESQL_EXPECT_OK(writer->Append(MakeRecord("pre_snapshot")));
+
+  // Simulate the snapshot's WAL clear while the writer is still live.
+  GOOGLESQL_EXPECT_OK(writer->Clear());
+
+  // A write after the clear must land in a real, readable WAL file.
+  GOOGLESQL_EXPECT_OK(writer->Append(MakeRecord("post_snapshot")));
+  GOOGLESQL_EXPECT_OK(writer->Sync());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto records, WalWriter::ReadAll(test_dir_));
+  ASSERT_EQ(records.size(), 1);
+  EXPECT_EQ(records[0].entry().database_uri(), "post_snapshot");
+}
+
 TEST_F(WalWriterTest, CreateResumesSequenceNumbering) {
   // Write some records with the first writer.
   {
